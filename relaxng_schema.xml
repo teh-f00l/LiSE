@@ -1,0 +1,300 @@
+<grammar xmlns="http://relaxng.org/ns/structure/1.0">
+
+  <start>
+    <element name="sland">
+      <ref name="slandContent"/>
+    </element>
+    <zeroOrMore>
+      <element name="window">
+	<ref name="windowContent"/>
+      </element>
+      <element name="board">
+	<ref name="boardContent"/>
+      </element>
+    </zeroOrMore>
+  </start>
+
+  <define name="windowContent">
+    <attribute name="board">
+      <text/>
+    </attribute>
+    <attribute name="x">
+      <text/>
+    </attribute>
+    <attribute name="y">
+      <text/>
+    </attribute>
+    <attribute name="width">
+      <text/>
+    </attribute>
+    <attribute name="height">
+      <text/>
+    </attribute>
+    <zeroOrMore>
+      <element name="menu">
+	<ref name="menuContent"/>
+      </element>
+      <element name="calendar">
+	<ref name="calendarContent"/>
+      </element>
+      <element name="hand">
+	<ref name="handContent"/>
+      </element>
+    </zeroOrMore>
+  </define>
+
+  <define name="relCoords">
+    <attribute name="left">
+      <text/>
+    </attribute>
+    <attribute name="right">
+      <text/>
+    </attribute>
+    <attribute name="top">
+      <text/>
+    </attribute>
+    <attribute name="bot">
+      <text/>
+    </attribute>
+  </define>
+
+  <define name="calendarContent">
+    <attribute name="name">
+      <text/>
+    </attribute>
+    <attribute name="scroll_speed">
+      <text/>
+    </attribute>
+    <attribute name="scrolled_to">
+      <text/>
+    </attribute>
+    <attribute name="rows_on_screen">
+      <text/>
+    </attribute>
+    <ref name="relCoords"/>
+    <oneOrMore>
+      <element name="column">
+	<attribute name="thing">
+	  <text/>
+	</attribute>
+	<attribute name="style">
+	  <text/>
+	</attribute>
+	<attribute name="cel_style">
+	  <text/>
+	</attribute>
+	<attribute name="hidden">
+	  <text/>
+	</attribute>
+      </element>
+    </oneOrMore>
+  </define>
+
+  <define name="menuContent">
+    <attribute name="name">
+      <text/>
+    </attribute>
+    <attribute name="style">
+      <text/>
+    </attribute>
+    <ref name="relCoords"/>
+    <oneOrMore>
+      <element name="menu_item">
+	<attribute name="name">
+	  <text/>
+	</attribute>
+	<attribute name="text">
+	  <text/>
+	</attribute>
+	<attribute name="onclick">
+	  <text/>
+	</attribute>
+      </element>
+    </oneOrMore>
+  </define>
+
+  <define name="slandContent">
+      <oneOrMore>
+	<element name="dimension">
+	  <ref name="dimensionContent"/>
+	</element>
+      </oneOrMore>
+      <zeroOrMore>
+	<element name="character">
+	  <ref name="characterContent"/>
+	</element>
+      </zeroOrMore>
+  </define>
+
+  <define name="displayNameContent">
+    <text/>
+    <attribute name="language">
+      <!--there's that ISO standard for language codes that I want to use-->
+      <text/>
+    </attribute>
+  </define>
+
+  <define name="portalContent">
+    <attribute name="destination">
+      <!--Notably not restricted to the names of places
+	  already defined. I guess a portal that points at a
+	  place that does not exist just hangs around until
+	  the end of the loader, and if you haven't made such
+	  a place by then, you get errored.-->
+      <text/>
+    </attribute>
+    <zeroOrMore>
+      <ref name="displayName"/>
+    </zeroOrMore>
+  </define>
+
+  <define name="thingContent">
+    <attribute name="name">
+      <text/>
+    </attribute>
+    <zeroOrMore>
+      <ref name="displayName"/>
+    </zeroOrMore>
+    <attribute name="location">
+      <text/>
+    </attribute>
+    <element name="journey">
+      <attribute name="index">
+	<text/>
+      </attribute>
+      <attribute name="progress">
+	<text/>
+      </attribute>
+      <oneOrMore>
+	<element name="step">
+	  <attribute name="origin">
+	    <text/>
+	  </attribute>
+	  <attribute name="destination">
+	    <text/>
+	  </attribute>
+	</element>
+      </oneOrMore>
+    </element>
+  </define>
+
+  <define name="placeContent">
+    <attribute name="name">
+      <text/>
+    </attribute>
+    <zeroOrMore>
+      <element name="display_name">
+	<ref name="displayNameContent"/>
+      </element>
+      <element name="portal">
+	<ref name="portalContent"/>
+      </element>
+    </zeroOrMore>
+  </define>
+
+  <define name="dimensionContent">
+    <zeroOrMore>
+      <element name="place">
+	<ref name="placeContent"/>
+      </element>
+      <element name="thing">
+	<ref name="thingContent"/>
+      </element>
+    </zeroOrMore>
+  </define>
+
+  <define name="factSheet">
+    <!--This is sort of like RDF-->
+    <oneOrMore>
+      <element name="fact">
+	<text/>
+	<attribute name="name">
+	  <text/>
+	</attribute>
+      </element>
+    </oneOrMore>
+  </define>
+
+  <define name="characterContent">
+    <attribute name="name">
+      <text/>
+    </attribute>
+    <ref name="factSheet"/>
+    <zeroOrMore>
+      <element name="display_name">
+	<ref name="displayNameContent"/>
+      </element>
+      <element name="dimension">
+	<attribute name="name">
+	  <text/>
+	</attribute>
+	<oneOrMore>
+	  <element name="thing">
+	    <attribute name="name">
+	      <text/>
+	    </attribute>
+	    <ref name="factSheet"/>
+	  </element>
+	  <element name="place">
+	    <attribute name="name">
+	      <text/>
+	    </attribute>
+	    <ref name="factSheet"/>
+	  </element>
+	  <element name="portal">
+	    <attribute name="origin">
+	      <text/>
+	    </attribute>
+	    <attribute name="destination">
+	      <text/>
+	    </attribute>
+	    <ref name="factSheet"/>
+	  </element>
+	</oneOrMore>
+      </element>
+    </zeroOrMore>
+  </define>
+
+  <define name="boardContent">
+    <attribute name="name">
+      <text/>
+    </attribute>
+    <attribute name="dimension">
+      <text/>
+    </attribute>
+    <attribute name="wallpaper">
+      <text/>
+    </attribute>
+    <attribute name="width">
+      <text/>
+    </attribute>
+    <attribute name="height">
+      <text/>
+    </attribute>
+    <zeroOrMore>
+      <element name="spot">
+	<attribute name="x">
+	  <text/>
+	</attribute>
+	<attribute name="y">
+	  <text/>
+	</attribute>
+	<attribute name="place">
+	  <text/>
+	</attribute>
+      </element>
+      <element name="pawn">
+	<attribute name="thing">
+	  <text/>
+	</attribute>
+	<attribute name="image">
+	  <!--This should be the name of a resource not defined
+	       here. It would be bogus if the save files cared where
+	       you put your images; that's the database's job.-->
+	  <text/>
+	</attribute>
+      </element>
+    </zeroOrMore>
+  </define>
+
+</grammar>
