@@ -1356,6 +1356,8 @@ class Closet(object):
         pass-thru."""
         if attrn in ('branch', 'tick', 'hi_branch', 'hi_tick',
                      'time', 'hi_time'):
+            if not isinstance(val, int):
+                raise TypeError('Time is integers.')
             setattr(self.timestream, attrn, val)
         else:
             super(Closet, self).__setattr__(attrn, val)
@@ -1391,8 +1393,6 @@ class Closet(object):
             from LiSE.gui.board import Board, Spot, Pawn, GamePiece
             global CharSheet
             from LiSE.gui.charsheet import CharSheet
-            global Menu
-            from LiSE.gui.menu import Menu
             global Img
             from LiSE.gui.img import Img
             global Atlas

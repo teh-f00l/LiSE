@@ -164,6 +164,14 @@ class Thing(Container):
             facade = self.character.get_facade(observer)
             return facade.get_thing_locations(self.name, branch)
 
+    def set_location(self, location, branch=None, tick=None,
+                     check_existence=False):
+        if check_existence:
+            # make sure the location is present in my host; throw
+            # ValueError if it isn't
+            self.host.get_place(str(location))
+        self.character.set_thing_location(self, location, branch, tick)
+
     def get_stats(self, observer=None, branch=None):
         if observer is None:
             return self.character.get_thing_stat_skel(self.name, branch)
@@ -177,6 +185,9 @@ class Thing(Container):
         else:
             facade = self.character.get_facade(observer)
             return facade.get_thing_stat(self.name, stat, branch, tick)
+
+    def set_stat(self, key, value, branch=None, tick=None):
+        self.character.set_thing_stat(self, key, value, branch, tick)
 
     def get_speed(self, observer=None, branch=None, tick=None):
         lo = self.get_location(observer, branch, tick)
