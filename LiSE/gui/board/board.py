@@ -23,6 +23,13 @@ class BoardLayout(RelativeLayout):
         if hasattr(w, 'upd_texs'):
             w.upd_texs()
 
+    def on_touch_up(self, touch):
+        r = None
+        for child in self.children:
+            r = child.on_touch_up(touch)
+            if r:
+                return r
+
 
 class Board(FloatLayout):
     """A graphical view onto a facade, resembling a game board."""
@@ -191,42 +198,19 @@ class Board(FloatLayout):
             for bone in pawn.new_branch(parent, branch, tick):
                 yield bone
 
-
-class BoardView(ScrollView):
-    board = ObjectProperty()
-
-    def _set_scroll_x(self, x):
-        self.board.bone = self.board.bone._replace(x=x)
-        self.board._trigger_set_bone()
-
-    def _set_scroll_y(self, y):
-        self.board.bone = self.board.bone._replace(y=y)
-        self.board._trigger_set_bone()
-
-    scroll_x = AliasProperty(
-        lambda self: self.board.bone.x if self.board else 0,
-        _set_scroll_x,
-        cache=False)
-
-    scroll_y = AliasProperty(
-        lambda self: self.board.bone.y if self.board else 0,
-        _set_scroll_y,
-        cache=False)
-
-    def on_touch_down(self, touch):
-        for preemptor in 'menu', 'charsheet', 'portaling':
-            if preemptor in touch.ud:
-                self.do_scroll_x = self.do_scroll_y = False
-        if self.do_scroll_x:
-            self.do_scroll_x = self.do_scroll_y = (
-                not self.board.pawnlayout.on_touch_down(touch))
-        if self.do_scroll_x:
-            self.do_scroll_x = self.do_scroll_y = (
-                not self.board.spotlayout.on_touch_down(touch))
-        if self.board.on_touch_down(touch):
-            return True
-        return super(BoardView, self).on_touch_down(touch)
-
     def on_touch_up(self, touch):
-        self.do_scroll_x = self.do_scroll_y = True
-        return super(BoardView, self).on_touch_up(touch)
+        touch.push()
+        touch.apply_transform_2d(self.parent.to_local)
+        r = self.pawnlayout.on_touch_up(touch)
+        if r:
+            touch.pop()
+            return r
+        r = self.spotlayout.on_touch_up(touch)
+        if r:
+            touch.pop()
+            return r
+        r = self.arrowlayout.on_touch_up(touch)
+        if r:
+            touch.pop()
+            return r
+        return super(Board, self).on_touch_up(touch)
