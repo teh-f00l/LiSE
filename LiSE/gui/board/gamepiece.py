@@ -1,12 +1,13 @@
 from LiSE.gui.texturestack import TextureStack
 from LiSE.gui.kivybits import SaveableWidgetMetaclass
 from kivy.properties import (
-    AliasProperty,
     NumericProperty,
     StringProperty,
     ObjectProperty,
     ListProperty,
-    ReferenceListProperty)
+    ReferenceListProperty,
+    AliasProperty
+)
 from kivy.clock import Clock
 
 

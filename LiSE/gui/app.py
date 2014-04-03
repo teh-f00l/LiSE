@@ -34,7 +34,11 @@ from LiSE.gui.board import (
 from LiSE.gui.board.gamepiece import GamePiece
 from LiSE.gui.board.arrow import get_points
 
-from LiSE.gui.kivybits import TouchlessWidget, ClosetLabel
+from LiSE.gui.kivybits import (
+    TouchlessWidget,
+    ClosetLabel,
+    SaveableWidgetMetaclass
+)
 from LiSE.gui.charsheet import CharSheetAdder
 
 from LiSE.util import TimestreamException
@@ -219,19 +223,72 @@ class SwatchBox(GridLayout):
             pass
 
 
-class DummySpot(Widget):
-    """This is at the end of the arrow that appears when you're drawing a
-    new portal. It's invisible, serving only to mark the pixel the
-    arrow ends at for the moment.
+class MenuTextInput(TextInput):
+    closet = ObjectProperty()
 
-    """
-    def collide_point(self, *args):
-        """This should be wherever you point, and therefore, always
-        collides."""
-        return True
+    def __init__(self, **kwargs):
+        super(MenuTextInput, self).__init__(**kwargs)
+        self.finalize()
 
-    def on_touch_move(self, touch):
-        self.center = touch.pos
+    def finalize(self, *args):
+        if not self.closet:
+            Clock.schedule_once(self.finalize, 0)
+            return
+        self.rehint_registrar(self.rehint)
+        self.rehint()
+
+    def rehint(self, *args):
+        self.text = ''
+        self.hint_text = self.hint_getter()
+
+    def on_focus(self, *args):
+        if not self.focus:
+            try:
+                self.value_setter(self.text)
+            except ValueError:
+                pass
+            self.rehint()
+        super(MenuTextInput, self).on_focus(*args)
+
+    def rehint_registrar(self, reh):
+        raise NotImplementedError(
+            "Abstract method")
+
+    def hint_getter(self):
+        raise NotImplementedError(
+            "Abstract method")
+
+    def value_setter(self, v):
+        raise NotImplementedError(
+            "Abstract method")
+
+
+class MenuBranchInput(MenuTextInput):
+    def rehint_registrar(self, reh):
+        self.closet.register_branch_listener(reh)
+
+    def hint_getter(self):
+        return str(self.closet.branch)
+
+    def value_setter(self, v):
+        w = int(v)
+        if w < 0:
+            raise ValueError
+        self.closet.branch = w
+
+
+class MenuTickInput(MenuTextInput):
+    def rehint_registrar(self, reh):
+        self.closet.register_tick_listener(reh)
+
+    def hint_getter(self):
+        return str(self.closet.tick)
+
+    def value_setter(self, v):
+        w = int(v)
+        if w < 0:
+            raise ValueError
+        self.closet.tick = w
 
 
 class DummyPawn(GamePiece):
@@ -320,6 +377,7 @@ class LiSELayout(FloatLayout):
     of those happen, the board handles touches on its own.
 
     """
+    __metaclass__ = SaveableWidgetMetaclass
     app = ObjectProperty()
     """The App instance that is running and thus holds the globals I need."""
     board = ObjectProperty()
@@ -410,13 +468,11 @@ class LiSELayout(FloatLayout):
                 touch.ud['portaling'] = True
                 self.portal_d = {
                     'origspot': touch.ud['spot'],
-                    'dummyspot': DummySpot(pos=touch.pos),
                     'dummyarrow': TouchlessWidget()}
                 self.board.arrowlayout.add_widget(
                     self.portal_d['dummyarrow'])
-                self.add_widget(
-                    self.portal_d['dummyspot'])
                 self._touch = touch
+                del touch.ud['spot']
                 self.portaling = 2
             else:
                 self.portaling = 0
@@ -465,6 +521,7 @@ class LiSELayout(FloatLayout):
                 board=self.board, portal=portal)
             self.board.arrowdict[unicode(portal)] = arrow
             self.board.arrowlayout.add_widget(arrow)
+            arrow.trigger_repoint()
         else:
             return super(LiSELayout, self).on_touch_up(touch)
 
@@ -770,7 +827,7 @@ class LiSELayout(FloatLayout):
 
 
 class LiSEApp(App):
-    """LiSE, run as a standalone application, and not a library.
+    """LiSE, run as a standalone application, and not a library
 
     As it's a Kivy app, this implements the things required of the App
     class. I also keep \"globals\" here.

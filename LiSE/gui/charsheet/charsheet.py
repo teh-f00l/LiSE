@@ -12,14 +12,15 @@ from kivy.adapters.listadapter import ListAdapter
 from kivy.adapters.models import SelectableDataItem
 from kivy.clock import Clock
 from kivy.properties import (
+    StringProperty,
     DictProperty,
     NumericProperty,
     BooleanProperty,
     OptionProperty,
     AliasProperty,
     ListProperty,
-    ReferenceListProperty,
-    ObjectProperty
+    ObjectProperty,
+    ReferenceListProperty
 )
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.listview import ListView, SelectableView
@@ -38,6 +39,7 @@ from LiSE.gui.kivybits import (
 )
 from LiSE.util import (
     SHEET_ITEM_TYPES,
+    TABLE_TYPES,
     CALENDAR_TYPES
 )
 
@@ -149,7 +151,6 @@ class NounStatListView(StackLayout):
     selection_mode = OptionProperty(
         'multiple', options=['none', 'single', 'multiple'])
     allow_empty_selection = BooleanProperty(False)
-    finalized = BooleanProperty(False)
 
     def iter_selection(self):
         for child in self.children:
@@ -214,6 +215,314 @@ class StatListView(Widget):
 
 class CharSheetAdder(ModalView):
     """A dialog in which you pick something to add to the CharSheet."""
+    __metaclass__ = SaveableWidgetMetaclass
+    kv = """
+<CharSheetAdder>:
+    StackLayout:
+        Label:
+            size_hint_y: 0.05
+            text: "Add an item to the character sheet"
+        TabbedPanel:
+            id: panel
+            size_hint_y: 0.9
+            default_tab: tables
+            TabbedPanelItem:
+                id: tables
+                text: root.get_text(_('Tables'))
+                TabbedPanel:
+                    id: tables_panel
+                    TabbedPanelItem:
+                        id: thing_tab
+                        text: root.get_text(_('Thing'))
+                        StackLayout:
+                            StackLayout:
+                                size_hint_x: 0.5
+                                Label:
+                                    text: root.get_text(_("Pick things."))
+                                    size_hint_y: 0.1
+                                ThingListView:
+                                    id: thing_tab_thing
+                                    charsheet: root.charsheet
+                                    size_hint_y: 0.3
+                            StackLayout:
+                                size_hint_x: 0.5
+                                Label:
+                                    text: root.get_text(_("Pick stats of things."))
+                                    size_hint_y: 0.1
+                                NounStatListView:
+                                    id: thing_tab_stat
+                                    size_hint_y: 0.8
+                                    specialitems: ["location"]
+                                    nounitems: thing_tab_thing.selection
+                                    charsheet: root.charsheet
+                                StackLayout:
+                                    size_hint_y: 0.1
+                                    TextInput:
+                                        id: thing_tab_stat_in
+                                        size_hint_x: 0.8
+                                        hint_text: root.get_text(_("New stat name"))
+                                    ClosetButton:
+                                        id: thing_tab_stat_add
+                                        closet: root.closet
+                                        stringname: _("@add")
+                                        symbolic: True
+                                        size_hint_x: 0.2
+                                        fun: thing_tab_stat.add_stat
+                                        arg: thing_tab_stat_in.text
+                    TabbedPanelItem:
+                        id: place_tab
+                        text: root.get_text(_('Place'))
+                        StackLayout:
+                            StackLayout:
+                                size_hint_x: 0.5
+                                Label:
+                                    text: root.get_text(_("Pick places."))
+                                    size_hint_y: 0.1
+                                PlaceListView:
+                                    id: place_tab_place
+                                    charsheet: root.charsheet
+                                    size_hint_y: 0.9
+                            StackLayout:
+                                size_hint_x: 0.5
+                                Label:
+                                    text: root.get_text(_("Pick stats of places."))
+                                    size_hint_y: 0.1
+                                NounStatListView:
+                                    id: place_tab_stat
+                                    nounitems: place_tab_place.selection
+                                    size_hint_y: 0.8
+                                StackLayout:
+                                    size_hint_y: 0.1
+                                    TextInput:
+                                        id: place_tab_stat_in
+                                        size_hint_x: 0.8
+                                        hint_text: root.get_text(_("New stat name"))
+                                    ClosetButton:
+                                        id: place_tab_stat_add
+                                        closet: root.closet
+                                        stringname: _("@add")
+                                        symbolic: True
+                                        size_hint_x: 0.2
+                                        fun: place_tab_stat.add_stat
+                                        arg: place_tab_stat_in.text
+                    TabbedPanelItem:
+                        id: portal_tab
+                        text: root.get_text(_('Portal'))
+                        StackLayout:
+                            StackLayout:
+                                size_hint_x: 0.5
+                                Label:
+                                    text: root.get_text(_("Pick portals."))
+                                    size_hint_y: 0.1
+                                PortalListView:
+                                    id: portal_tab_portal
+                                    charsheet: root.charsheet
+                                    size_hint_y: 0.9
+                            StackLayout:
+                                size_hint_x: 0.5
+                                Label:
+                                    text: root.get_text(_("Pick stats of portals."))
+                                    size_hint_y: 0.1
+                                NounStatListView:
+                                    id: portal_tab_stat
+                                    specialitems: ["origin", "destination"]
+                                    nounitems: portal_tab_portal.selection
+                                    size_hint_y: 0.8
+                                StackLayout:
+                                    size_hint_y: 0.1
+                                    TextInput:
+                                        id: portal_tab_stat_in
+                                        size_hint_x: 0.8
+                                        hint_text: root.get_text(_("New stat name"))
+                                    ClosetButton:
+                                        id: portal_tab_stat_add
+                                        closet: root.closet
+                                        stringname: _("@add")
+                                        symbolic: True
+                                        size_hint_x: 0.2
+                                        fun: portal_tab_stat.add_stat
+                                        arg: portal_tab_stat_in.text
+                    TabbedPanelItem:
+                        id: char_tab
+                        text: root.get_text(_('Character'))
+                        StackLayout:
+                            Label:
+                                text: root.get_text(_("Pick stats of the character."))
+                                size_hint_y: 0.1
+                            StatListView:
+                                id: char_tab_stat
+                                charsheet: root.charsheet
+                                size_hint_y: 0.8
+                            StackLayout:
+                                size_hint_y: 0.1
+                                TextInput:
+                                    id: char_tab_stat_in
+                                    size_hint_x: 0.8
+                                    hint_text: root.get_text(_("New stat name"))
+                                ClosetButton:
+                                    id: char_tab_stat_add
+                                    closet: root.closet
+                                    size_hint_x: 0.2
+                                    stringname: _("@add")
+                                    symbolic: True
+                                    fun: char_tab_stat.add_stat
+                                    arg: char_tab_stat_in.text
+            TabbedPanelItem:
+                id: calendars
+                text: root.get_text(_('Calendars'))
+                TabbedPanel:
+                    id: calendars_panel
+                    TabbedPanelItem:
+                        id: thing_cal
+                        text: root.get_text(_('Thing'))
+                        StackLayout:
+                            StackLayout:
+                                size_hint_x: 0.5
+                                Label:
+                                    text: root.get_text(_("Pick a thing."))
+                                    size_hint_y: 0.1
+                                ThingListView:
+                                    id: thing_cal_thing
+                                    charsheet: root.charsheet
+                                    selection_mode: 'single'
+                                    size_hint_y: 0.9
+                            StackLayout:
+                                size_hint_x: 0.5
+                                Label:
+                                    text: root.get_text(_("Pick one of its stats."))
+                                    size_hint_y: 0.1
+                                NounStatListView:
+                                    id: thing_cal_stat
+                                    specialitems: ["location"]
+                                    nounitems: thing_cal_thing.selection
+                                    selection_mode: 'single'
+                                    size_hint_y: 0.8
+                                StackLayout:
+                                    size_hint_y: 0.1
+                                    TextInput:
+                                        id: thing_cal_stat_in
+                                        hint_text: root.get_text(_("New stat name"))
+                                        size_hint_x: 0.8
+                                    ClosetButton:
+                                        id: thing_cal_stat_add
+                                        stringname: _("@add")
+                                        symbolic: True
+                                        size_hint_x: 0.2
+                                        closet: root.closet
+                                        args: [thing_cal_thing.selection[0], thing_cal_stat_in.text] if thing_cal_thing.selection else []
+                    TabbedPanelItem:
+                        id: place_cal
+                        text: root.get_text(_('Place'))
+                        StackLayout:
+                            StackLayout:
+                                size_hint_x: 0.5
+                                Label:
+                                    text: root.get_text(_("Pick a place."))
+                                    size_hint_y: 0.1
+                                PlaceListView:
+                                    id: place_cal_place
+                                    charsheet: root.charsheet
+                                    selection_mode: 'single'
+                                    size_hint_y: 0.9
+                            StackLayout:
+                                size_hint_x: 0.5
+                                Label:
+                                    text: root.get_text(_("Pick one of its stats."))
+                                    size_hint_y: 0.1
+                                NounStatListView:
+                                    id: place_cal_stat
+                                    nounitems: place_cal_place.selection
+                                    charsheet: root.charsheet
+                                    selection_mode: 'single'
+                                    size_hint_y: 0.8
+                                StackLayout:
+                                    size_hint_y: 0.1
+                                    TextInput:
+                                        id: place_cal_stat_in
+                                        hint_text: root.get_text(_("New stat name"))
+                                        size_hint_x: 0.8
+                                    ClosetButton:
+                                        id: place_cal_stat_add
+                                        closet: root.closet
+                                        size_hint_x: 0.2
+                                        stringname: _('@add')
+                                        symbolic: True
+                                        fun: root.confirm
+                                        args: [place_cal_place.selection[0], place_cal_stat_in.text] if place_cal_place.selection else []
+                    TabbedPanelItem:
+                        id: portal_cal
+                        text: root.get_text(_('Portal'))
+                        StackLayout:
+                            StackLayout:
+                                size_hint_x: 0.5
+                                Label:
+                                    text: root.get_text(_("Pick a portal."))
+                                    size_hint_y: 0.1
+                                PortalListView:
+                                    id: portal_cal_portal
+                                    charsheet: root.charsheet
+                                    selection_mode: 'single'
+                                    size_hint_y: 0.9
+                            StackLayout:
+                                size_hint_x: 0.5
+                                Label:
+                                    text: root.get_text(_("Pick one of its stats."))
+                                    size_hint_y: 0.1
+                                NounStatListView:
+                                    id: portal_cal_stat
+                                    specialitems: ["origin", "destination"]
+                                    nounitems: portal_cal_portal.selection
+                                    selection_mode: 'single'
+                                    size_hint_y: 0.8
+                                StackLayout:
+                                    size_hint_y: 0.1
+                                    TextInput:
+                                        id: portal_cal_stat_in
+                                        hint_text: root.get_text(_("New stat name"))
+                                        size_hint_x: 0.8
+                                    ClosetButton:
+                                        id: portal_cal_stat_add
+                                        closet: root.closet
+                                        size_hint_x: 0.2
+                                        stringname: _('@add')
+                                        symbolic: True
+                                        fun: root.confirm
+                                        args: [portal_cal_portal.selection[0], portal_cal_stat_in.text] if portal_cal_portal.selection else []
+                    TabbedPanelItem:
+                        id: char_cal
+                        text: root.get_text(_('Character'))
+                        StackLayout:
+                            Label:
+                                text: root.get_text(_("Pick a stat."))
+                                size_hint_y: 0.1
+                            StatListView:
+                                id: char_cal_stat
+                                charsheet: root.charsheet
+                                selection_mode: 'single'
+                                size_hint_y: 0.8
+                            StackLayout:
+                                size_hint_y: 0.1
+                                TextInput:
+                                    id: char_cal_stat_in
+                                    hint_text: root.get_text(_("New stat name"))
+                                    size_hint_x: 0.8
+                                ClosetButton:
+                                    id: char_cal_stat_add
+                                    closet: root.closet
+                                    size_hint_x: 0.2
+                                    stringname: _("@add")
+                                    symbolic: True
+                                    fun: root.confirm
+                                    args: [char_cal_stat_in.text]
+        BoxLayout:
+            size_hint_y: 0.05
+            Button:
+                text: root.get_text(_("Cancel"))
+                on_release: root.dismiss()
+            Button:
+                text: root.get_text(_("Confirm"))
+                on_release: root.confirm()
+"""
     charsheet = ObjectProperty()
     character = AliasProperty(
         lambda self: self.charsheet.character,
@@ -418,15 +727,20 @@ class CharSheetItem(BoxLayout):
     asbox = ObjectProperty(None, allownone=True)
     buttons = ListProperty()
     middle = ObjectProperty()
-    item_class = ObjectProperty()
+    item_type = StringProperty()
     item_kwargs = DictProperty()
-    widspec = ReferenceListProperty(item_class, item_kwargs)
     charsheet = ObjectProperty()
     mybone = ObjectProperty()
+
     i = AliasProperty(
         lambda self: self.csbone.idx if self.csbone else -1,
         lambda self, v: None,
         bind=('csbone',))
+    item_class = AliasProperty(
+        lambda self: self.get_item_class(),
+        lambda self, v: None,
+        bind=('item_type',))
+    widspec = ReferenceListProperty(item_class, item_kwargs)
 
     def __init__(self, **kwargs):
         self._trigger_set_bone = Clock.create_trigger(self.set_bone)
@@ -473,6 +787,7 @@ class CharSheetItem(BoxLayout):
             Clock.schedule_once(self.finalize, 0)
             return
         self.middle = BoxLayout()
+        self.item_kwargs['item_type'] = self.item_type
         self.content = self.item_class(**self.item_kwargs)
         self.buttonbox = BoxLayout(
             orientation='vertical',
@@ -763,7 +1078,7 @@ class CharSheet(StackLayout):
                     stats.append(subbone.stat)
             return {
                 'csbone': bone,
-                'item_class': TableView,
+                'item_type': 'thing_tab',
                 'item_kwargs': {
                     'charsheet': self,
                     'headers': fieldnames,
@@ -775,7 +1090,7 @@ class CharSheet(StackLayout):
         elif bone.type == 'place_tab':
             return {
                 'csbone': bone,
-                'item_class': TableView,
+                'item_type': 'place_tab',
                 'item_kwargs': {
                     'charsheet': self,
                     'headers': ['place'],
@@ -796,7 +1111,7 @@ class CharSheet(StackLayout):
                     stats.append(subbone.stat)
             return {
                 'csbone': bone,
-                'item_class': TableView,
+                'item_type': 'portal_tab',
                 'item_kwargs': {
                     'charsheet': self,
                     'headers': headers,
@@ -817,7 +1132,7 @@ class CharSheet(StackLayout):
                 unicode(self.character)][bone.idx]
             return {
                 'csbone': bone,
-                'item_class': CalendarView,
+                'item_type': bone.type,
                 'item_kwargs': {
                     'charsheet': self,
                     'boneatt': keyns[-1],

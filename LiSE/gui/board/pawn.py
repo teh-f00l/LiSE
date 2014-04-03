@@ -75,14 +75,6 @@ will update its position appropriately.
             unicode(self.thing.character)][unicode(self.thing)],
         lambda self, v: None,
         bind=('thing',))
-    get_bone = AliasProperty(
-        lambda self: self.thing.character.closet.timely_bone_getter(
-            [u'pawn', unicode(self.board.facade.observer),
-             unicode(self.board.facade.observed),
-             unicode(self.thing.host), unicode(self.thing)])
-        if self.board else None,
-        lambda self, v: None,
-        bind=('board', 'time'))
     graphic_name = AliasProperty(
         lambda self: self.bone.graphic if self.bone else '',
         lambda self, v: None,
@@ -94,9 +86,11 @@ will update its position appropriately.
 
         """
         super(Pawn, self).__init__(**kwargs)
+        self.bone = self.get_pawn_bone()
         self.closet.register_time_listener(self.handle_time)
         self.board.pawndict[unicode(self.thing)] = self
         self.handle_time(*self.closet.time)
+        self.locskel.register_listener(self.reposskel)
 
     def __str__(self):
         return str(self.thing)
@@ -201,19 +195,17 @@ will update its position appropriately.
                 return spot
 
     def on_touch_down(self, touch):
-        if self.collide_point(*touch.pos):
+        if self.collide_point(touch.x, touch.y) and 'spot' not in touch.ud:
             touch.ud["pawn"] = self
             touch.grab(self)
             return self
 
     def on_touch_move(self, touch):
-        if touch.grab_current is self:
+        if 'pawn' in touch.ud and touch.ud['pawn'] is self:
             self.center = touch.pos
             return self
 
     def on_touch_up(self, touch):
-        if 'pawn' in touch.ud:
-            del touch.ud['pawn']
         if touch.grab_current is self:
             touch.ungrab(self)
             new_spot = self.check_spot_collision()

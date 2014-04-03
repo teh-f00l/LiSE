@@ -1351,6 +1351,8 @@ class Closet(object):
         pass-thru."""
         if attrn in ('branch', 'tick', 'hi_branch', 'hi_tick',
                      'time', 'hi_time'):
+            if not isinstance(val, int):
+                raise TypeError('Time is integers.')
             setattr(self.timestream, attrn, val)
         else:
             super(Closet, self).__setattr__(attrn, val)
@@ -1359,7 +1361,7 @@ class Closet(object):
                  USE_KIVY=False, **kwargs):
         """Initialize a Closet for the given connector and path.
 
-        With USE_KIVY, I will use the kivybits module to load images.
+        With kivy=True, I will use the kivybits module to load images.
 
         """
         global Place
@@ -1386,8 +1388,6 @@ class Closet(object):
             from LiSE.gui.board import Board, Spot, Pawn, GamePiece
             global CharSheet
             from LiSE.gui.charsheet import CharSheet
-            global Menu
-            from LiSE.gui.menu import Menu
             global Img
             from LiSE.gui.img import Img
             global Atlas
@@ -1596,7 +1596,7 @@ class Closet(object):
             self.add_img_to_graphic = add_img_to_graphic
             self.rm_graphic_layer = rm_graphic_layer
 
-            self.USE_KIVY = True
+            self.kivy = True
 
         for wd in self.working_dicts:
             setattr(self, wd, dict())
