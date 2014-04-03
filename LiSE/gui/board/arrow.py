@@ -177,20 +177,6 @@ class Arrow(Widget):
 
     """
     __metaclass__ = SaveableWidgetMetaclass
-    kv = """
-<Arrow>:
-    canvas:
-        Color:
-            rgba: root.bg_color
-        Line:
-            width: root.w * 1.4
-            points: root.points
-        Color:
-            rgba: root.fg_color
-        Line:
-            width: root.w
-            points: root.points
-    """
     margin = 10
     """When deciding whether a touch collides with me, how far away can
     the touch get before I should consider it a miss?"""
@@ -240,6 +226,8 @@ class Arrow(Widget):
             size=self.trigger_repoint)
         self.board.host.closet.register_time_listener(
             self.trigger_repawn)
+        self.trigger_repoint()
+        self.trigger_repawn()
 
     def __unicode__(self):
         """Return Unicode name of my :class:`Portal`"""

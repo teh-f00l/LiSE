@@ -4,6 +4,18 @@
 #: import solarized LiSE.gui.style.solarized
 #: import _ LiSE.util.passthru
 #: import sep os.sep
+<Arrow>:
+    canvas:
+        Color:
+            rgba: root.bg_color
+        Line:
+            width: root.w * 1.4
+            points: root.points
+        Color:
+            rgba: root.fg_color
+        Line:
+            width: root.w
+            points: root.points
 <ClosetLabel>:
     font_name: sep.join([lisepathl[-1], 'gui', 'assets', 'Entypo.ttf']) if self.symbolic else 'DroidSans'
     font_size: 30 if self.symbolic else 16
