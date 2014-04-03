@@ -1,6 +1,6 @@
 # This file is part of LiSE, a framework for life simulation games.
 # Copyright (c) 2013 Zachary Spector,  zacharyspector@gmail.com
-from LiSE.gui.kivybits import LiSEWidgetMetaclass
+from LiSE.gui.kivybits import SaveableWidgetMetaclass
 from kivy.properties import (
     AliasProperty,
     DictProperty,
@@ -33,7 +33,7 @@ class BoardLayout(RelativeLayout):
 
 class Board(FloatLayout):
     """A graphical view onto a facade, resembling a game board."""
-    __metaclass__ = LiSEWidgetMetaclass
+    __metaclass__ = SaveableWidgetMetaclass
     demands = ["thing", "graphic_img"]
     tables = [
         ("board", {

@@ -19,7 +19,8 @@ from kivy.properties import (
     OptionProperty,
     AliasProperty,
     ListProperty,
-    ObjectProperty
+    ObjectProperty,
+    ReferenceListProperty
 )
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.listview import ListView, SelectableView
@@ -214,7 +215,7 @@ class StatListView(Widget):
 
 class CharSheetAdder(ModalView):
     """A dialog in which you pick something to add to the CharSheet."""
-    __metaclass__ = LiSEWidgetMetaclass
+    __metaclass__ = SaveableWidgetMetaclass
     kv = """
 <CharSheetAdder>:
     StackLayout:
@@ -728,9 +729,9 @@ class CharSheetItem(BoxLayout):
     middle = ObjectProperty()
     item_type = StringProperty()
     item_kwargs = DictProperty()
-    widspec = ReferenceListProperty(item_class, item_kwargs)
     charsheet = ObjectProperty()
     mybone = ObjectProperty()
+
     i = AliasProperty(
         lambda self: self.csbone.idx if self.csbone else -1,
         lambda self, v: None,
@@ -739,6 +740,7 @@ class CharSheetItem(BoxLayout):
         lambda self: self.get_item_class(),
         lambda self, v: None,
         bind=('item_type',))
+    widspec = ReferenceListProperty(item_class, item_kwargs)
 
     def __init__(self, **kwargs):
         self._trigger_set_bone = Clock.create_trigger(self.set_bone)
@@ -847,7 +849,7 @@ class CharSheet(StackLayout):
     CharSheet contains a ListView of CharSheetItems.
 
     """
-    __metaclass__ = LiSEWidgetMetaclass
+    __metaclass__ = SaveableWidgetMetaclass
     demands = ["character"]
 
     def _calendar_decl(

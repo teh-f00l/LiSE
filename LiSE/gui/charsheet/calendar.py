@@ -22,11 +22,11 @@ from kivy.logger import Logger
 from kivy.graphics import Color, Line, Triangle
 
 from LiSE.util import CALENDAR_TYPES
-from LiSE.gui.kivybits import LiSEWidgetMetaclass
+from LiSE.gui.kivybits import SaveableWidgetMetaclass
 
 
 class Cell(Label):
-    __metaclass__ = LiSEWidgetMetaclass
+    __metaclass__ = SaveableWidgetMetaclass
     kv = """
 <Cell>:
     valign: 'top'
@@ -170,7 +170,7 @@ class Calendar(Layout):
     here. Look in CalendarView below.
 
     """
-    __metaclass__ = LiSEWidgetMetaclass
+    __metaclass__ = SaveableWidgetMetaclass
     kv = """
 <Calendar>:
     font_name: 'DroidSans'

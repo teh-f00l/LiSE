@@ -12,7 +12,7 @@ from LiSE.util import (
     fortyfive,
     ninety
 )
-from LiSE.gui.kivybits import LiSEWidgetMetaclass
+from LiSE.gui.kivybits import SaveableWidgetMetaclass
 from kivy.uix.widget import Widget
 from kivy.properties import (
     ObjectProperty,
@@ -176,7 +176,7 @@ class Arrow(Widget):
     its destination.
 
     """
-    __metaclass__ = LiSEWidgetMetaclass
+    __metaclass__ = SaveableWidgetMetaclass
     kv = """
 <Arrow>:
     canvas:
