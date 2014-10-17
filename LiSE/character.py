@@ -62,7 +62,49 @@ class RuleFollower(object):
         )
 
 
-class CharacterThingMapping(MutableMapping, RuleFollower):
+class CharacterThingPlaceMapping(MutableMapping, RuleFollower):
+    def _set_cache(self, key, val, branch, tick):
+        self._cache[key] = val
+        if branch in self._keycache:
+            for t in list(self._keycache[branch].keys()):
+                if t > tick:
+                    del self._keycache[branch][t]
+            if tick in self._keycache[branch]:
+                self._keycache[branch][tick].add(key)
+                return
+            try:
+                self._keycache[branch][tick] = set(
+                    self._keycache[branch][
+                        max(t for t in self._keycache[branch]
+                            if t < tick)
+                    ]
+                )
+                self._keycache[branch][tick].add(key)
+            except ValueError:
+                pass
+
+    def _del_cached(self, key, branch, tick):
+        if key in self._cache:
+            del self._cache[key]
+        if branch in self._keycache:
+            for t in list(self._keycache[branch].keys()):
+                if t > tick:
+                    del self._keycache[branch][t]
+            if tick in self._keycache[branch]:
+                self._keycache[branch][tick].discard(key)
+            try:
+                self._keycache[branch][tick] = set(
+                    self._keycache[branch][
+                        max(t for t in self._keycache[branch]
+                            if t < tick)
+                    ]
+                )
+                self._keycache[branch][tick].discard(key)
+            except ValueError:
+                pass
+
+
+class CharacterThingMapping(CharacterThingPlaceMapping):
     """:class:`Thing` objects that are in a :class:`Character`"""
     _book = "thing"
 
@@ -145,7 +187,7 @@ class CharacterThingMapping(MutableMapping, RuleFollower):
         )
         r = Thing(self.character, th)
         if self.engine.caching:
-            self._cache[thing] = r
+            self._set_cache(th, r, *self.engine.time)
         return r
 
     def __setitem__(self, thing, val):
@@ -155,52 +197,15 @@ class CharacterThingMapping(MutableMapping, RuleFollower):
         """
         th = Thing(self.character, thing)
         th.clear()
-        th.exists = True
         th.update(val)
         if self.engine.caching:
-            self._cache[thing] = th
-            (branch, tick) = self.engine.time
-            if branch in self._keycache:
-                for t in list(self._keycache[branch].keys()):
-                    if t > tick:
-                        del self._keycache[branch][t]
-                if tick in self._keycache[branch]:
-                    self._keycache[branch][tick].add(self.name)
-                    return
-                try:
-                    self._keycache[branch][tick] = set(
-                        self._keycache[branch][
-                            max(t for t in self._keycache[branch]
-                                if t < tick)
-                        ]
-                    )
-                    self._keycache[branch][tick].add(self.name)
-                except ValueError:
-                    pass
+            self._set_cache(thing, th, *self.engine.time)
 
     def __delitem__(self, thing):
         """Delete the thing from the cache and the database"""
         (branch, tick) = self.engine.time
         if self.engine.caching:
-            if thing in self._cache:
-                del self._cache[thing]
-            if branch in self._keycache:
-                for t in list(self._keycache[branch].keys()):
-                    if t > tick:
-                        del self._keycache[branch][t]
-                if tick in self._keycache[branch]:
-                    self._keycache[branch][tick].remove(thing)
-                    return
-                try:
-                    self._keycache[branch][tick] = set(
-                        self._keycache[branch][
-                            max(t for t in self._keycache[branch]
-                                if t < tick)
-                        ]
-                    )
-                    self._keycache[branch][tick].remove(self.name)
-                except ValueError:
-                    pass
+            self._del_cached(thing, branch, tick)
         self.engine.db.thing_loc_and_next_del(
             self.character.name,
             self.name,
@@ -213,7 +218,7 @@ class CharacterThingMapping(MutableMapping, RuleFollower):
         return repr(dict(self))
 
 
-class CharacterPlaceMapping(MutableMapping, RuleFollower):
+class CharacterPlaceMapping(CharacterThingPlaceMapping):
     """:class:`Place` objects that are in a :class:`Character`"""
     _book = "place"
 
@@ -316,18 +321,33 @@ class CharacterPlaceMapping(MutableMapping, RuleFollower):
         pl.clear()
         pl.update(v)
 
+    def _del_cached(self, place, branch, tick):
+        if place in self._cache:
+            del self._cache[place]
+        if branch in self._keycache:
+            # delete all future cache
+            for t in list(self._keycache[branch].keys()):
+                if t > tick:
+                    del self._keycache[branch][t]
+            if tick in self._keycache[branch]:
+                self._keycache[branch][tick].discard(place)
+                return
+            try:
+                self._keycache[branch][tick] = set(
+                    self._keycache[branch][
+                        max(t for t in self._keycache[branch]
+                            if t < tick)
+                    ]
+                )
+                self._keycache[branch][tick].discard(place)
+            except ValueError:
+                pass
+
     def __delitem__(self, place):
         """Delete place from both cache and database"""
         (branch, tick) = self.engine.time
         if self.engine.caching:
-            if place in self._cache:
-                del self._cache[place]
-            if (
-                    branch in self._keycache and
-                    tick in self._keycache[branch] and
-                    place in self._keycache[branch][tick]
-            ):
-                self._keycache[branch][tick].remove(place)
+            self._del_cached(place, branch, tick)
         self.engine.gorm.db.exist_node(
             self.character.name,
             place,
@@ -341,7 +361,7 @@ class CharacterPlaceMapping(MutableMapping, RuleFollower):
         return repr(dict(self))
 
 
-class CharacterThingPlaceMapping(MutableMapping):
+class CharacterNodeMapping(MutableMapping):
     """Replacement for gorm's GraphNodeMapping that does Place and Thing"""
     def __init__(self, character):
         """Store the character"""
@@ -1286,7 +1306,7 @@ class Character(DiGraph, RuleFollower, StatSet):
         )
         self.thing = CharacterThingMapping(self)
         self.place = CharacterPlaceMapping(self)
-        self.node = CharacterThingPlaceMapping(self)
+        self.node = CharacterNodeMapping(self)
         self.portal = CharacterPortalSuccessorsMapping(self)
         self.adj = self.portal
         self.succ = self.adj
@@ -1390,14 +1410,22 @@ class Character(DiGraph, RuleFollower, StatSet):
             location,
             next_location
         )
+        if self.engine.caching:
+            self.place._del_cached(name, branch, tick)
+            self.thing._set_cache(name, Thing(self, name), branch, tick)
 
     def thing2place(self, name):
         """Unset a Thing's location, and thus turn it into a Place."""
+        (branch, tick) = self.engine.time
         self.engine.db.thing_loc_and_next_del(
-            self.namee,
+            self.name,
             name,
-            *self.engine.time
+            branch,
+            tick
         )
+        if self.engine.caching:
+            self.thing._del_cached(name, branch, tick)
+            self.place._set_cache(name, Place(self, name), branch, tick)
 
     def add_portal(self, origin, destination, symmetrical=False, **kwargs):
         """Connect the origin to the destination with a :class:`Portal`.

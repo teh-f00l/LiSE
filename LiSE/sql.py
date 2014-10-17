@@ -78,13 +78,12 @@ characters = "SELECT character FROM characters;"
 ct_characters = "SELECT COUNT(*) FROM characters;"
 ct_character = "SELECT COUNT(*) FROM characters WHERE character=?;"
 char_del_fmt = "DELETE FROM {tbl} WHERE character=?;"
-poll_rules_fmt = (
+poll_char_rules_fmt = (
     "SELECT "
     "characters.character, "
     "characters.{tbl}_rulebook, "
     "active_rules.rule, "
-    "active_rules.active, "
-    "handle.handled "
+    "active_rules.active "
     "FROM characters JOIN active_rules ON "
     "characters.{tbl}_rulebook=active_rules.rulebook "
     "JOIN "
@@ -123,6 +122,20 @@ active_rules_rulebook = (
     "rulebook=? AND "
     "branch=? AND "
     "tick<=? GROUP BY rulebook, rule, branch) AS hitick "
+    "ON active_rules.rulebook=hitick.rulebook "
+    "AND active_rules.rule=hitick.rule "
+    "AND active_rules.branch=hitick.branch "
+    "AND active_rules.tick=hitick.tick;"
+)
+active_rules_except_rulebooks = (
+    "SELECT active_rules.rule, active_rules.active "
+    "FROM active_rules JOIN "
+    "(SELECT rulebook, rule, branch, MAX(tick) AS tick "
+    "FROM active_rules WHERE "
+    "branch=? AND "
+    "tick<=? AND "
+    "rulebook NOT IN ({qms}) "
+    "GROUP BY rulebook, rule, branch) AS hitick "
     "ON active_rules.rulebook=hitick.rulebook "
     "AND active_rules.rule=hitick.rule "
     "AND active_rules.branch=hitick.branch "
@@ -534,4 +547,48 @@ thing_locs_data = (
     "WHERE character=? "
     "AND thing=? "
     "AND branch=?;"
+)
+node_rulebook_get = (
+    "SELECT rulebook FROM node_rulebook WHERE character=? AND node=?;"
+)
+node_rulebook_ins = (
+    "INSERT INTO node_rulebook (character, node, rulebook) VALUES (?, ?, ?);"
+)
+node_rulebook_upd = (
+    "UPDATE node_rulebook SET rulebook=? WHERE character=? AND node=?;"
+)
+poll_node_rules = (
+    "SELECT node_rulebook.character, "
+    "node_rulebook.node, "
+    "node_rulebook.rulebook, "
+    "active_rules.rule, "
+    "active_rules.active "
+    "FROM node_rulebook JOIN active_rules ON "
+    "node_rulebook.rulebook=active_rules.rulebook "
+    "JOIN "
+    "(SELECT rulebook, rule, branch, MAX(tick) AS tick "
+    "FROM active_rules WHERE "
+    "branch=? AND "
+    "tick<=? GROUP BY rulebook, rule, branch) AS hitick "
+    "ON active_rules.rulebook=hitick.rulebook "
+    "AND active_rules.rule=hitick.rule "
+    "AND active_rules.branch=hitick.branch "
+    "AND active_rules.tick=hitick.tick "
+    "LEFT OUTER JOIN rulebooks "
+    "ON rulebooks.rulebook=node_rulebook.rulebook "
+    "AND rulebooks.rule=active_rules.rule "
+    "LEFT OUTER JOIN "
+    "(SELECT character, node, rule, 1 as handled "
+    "FROM node_rules_handled WHERE branch=? AND tick=?) "
+    "AS handle ON "
+    "handle.character=node_rulebook.character AND "
+    "handle.node=node_rulebook.node AND "
+    "handle.rule=active_rules.rule "
+    "WHERE handle.handled IS NULL"
+    ";"
+)
+node_rule_handled = (
+    "INSERT INTO node_rules_handled "
+    "(character, node, rulebook, rule, branch, tick) "
+    "VALUES (?, ?, ?, ?, ?, ?);"
 )

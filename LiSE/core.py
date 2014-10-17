@@ -484,14 +484,15 @@ class Engine(object):
         del self.locktime
 
     def _active_branches(self):
-        yield from self.gorm._active_branches()
-
-    def _poll_rules(self):
-        yield from self.db.poll_rules(*self.time)
+        return self.gorm._active_branches()
 
     def _follow_rules(self):
         (branch, tick) = self.time
-        for (ruletyp, charname, rulebook, rulename) in self._poll_rules():
+        for (
+                ruletyp, charname, rulebook, rulename
+        ) in self.db.poll_char_rules(
+            branch, tick
+        ):
             character = self.character[charname]
             rule = self.rule[rulename]
 
@@ -516,6 +517,20 @@ class Engine(object):
                 raise TypeError("Unknown type of rule")
             self.db.handled_rule(
                 ruletyp, charname, rulebook, rulename, branch, tick
+            )
+        for (
+                charname, nodename, rulebook, rulename
+        ) in self.db.poll_node_rules(
+                branch, tick
+        ):
+            character = self.character[charname]
+            if nodename not in character.node:
+                continue
+            node = character.node[nodename]
+            rule = self.rule[rulename]
+            yield (rule(self, character, node), rulename, "node", rulebook)
+            self.db.handled_node_rule(
+                charname, nodename, rulebook, rulename, branch, tick
             )
 
     def advance(self):

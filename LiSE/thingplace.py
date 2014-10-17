@@ -38,17 +38,37 @@ class ThingPlace(Node, StatSet):
     def rule(self):
         return RuleMapping(self.engine, self.rulebook)
 
+    @property
+    def _rulebook_name(self):
+        return self.engine.db.node_rulebook_get(
+            self.character.name, self.name
+        )
+
+    @_rulebook_name.setter
+    def _rulebook_name(self, v):
+        self.engine.db.node_rulebook_set(
+            self.character.name, self.name, v
+        )
+
     def __init__(self, character, name):
         """Store character and name, and maybe initialize a couple caches"""
         self.character = character
         self.engine = character.engine
         self.name = name
-        self._rulebook_name = str(name) + "_rulebook"
+        if self._rulebook_name is None:
+            self._rulebook_name = str(name) + "_rulebook"
         if self.engine.caching:
             self._keycache = {}
-            self._statcache = {}
             self._on_stat_set = []
         super().__init__(character, name)
+
+    def __setitem__(self, k, v):
+        super().__setitem__(k, v)
+        self._stat_set(k, v)
+
+    def __delitem__(self, k):
+        super().__delitem__(k)
+        self._stat_del(k)
 
     def _portal_dests(self):
         """Iterate over names of nodes you can get to from here"""
@@ -223,17 +243,7 @@ class Thing(ThingPlace):
                     continue
             raise CacheError("Locations not cached correctly")
         else:
-            if not self.engine.caching:
-                return super().__getitem__(key)
-            (branch, tick) = self.engine.time
-            return cache_get(
-                self._statcache,
-                self._keycache,
-                branch,
-                tick,
-                key,
-                super().__getitem__
-            )
+            return super().__getitem__(key)
 
     def __setitem__(self, key, value):
         """Set ``key``=``value`` for the present game-time."""
@@ -258,20 +268,7 @@ class Thing(ThingPlace):
             self._loccache[branch][tick] = value
             self._stat_set('locations', value)
         else:
-            if not self.engine.caching:
-                super().__setitem__(key, value)
-                return
-            (branch, tick) = self.engine.time
-            cache_set(
-                self._statcache,
-                self._keycache,
-                branch,
-                tick,
-                key,
-                value,
-                super().__setitem__
-            )
-            self._stat_set(key, value)
+            super().__setitem__(key, value)
 
     def __delitem__(self, key):
         """As of now, this key isn't mine."""
@@ -285,18 +282,7 @@ class Thing(ThingPlace):
                 'locations'
         ):
             raise ValueError("Read-only")
-        if not self.engine.caching:
-            super().__delitem__(key)
-            return
-        (branch, tick) = self.engine.time
-        cache_del(
-            branch,
-            tick,
-            self._statcache,
-            key,
-            super().__delitem__
-        )
-        self._stat_del(key)
+        super().__delitem__(key)
 
     def _load_locs_branch(self, branch):
         """Private method. Cache stored location data for this branch."""
@@ -609,48 +595,7 @@ class Place(ThingPlace):
         elif key == 'character':
             return self.character.name
         else:
-            if not self.engine.caching:
-                return super().__getitem__(key)
-            (branch, tick) = self.engine.time
-            return cache_get(
-                self._statcache,
-                self._keycache,
-                branch,
-                tick,
-                key,
-                super().__getitem__
-            )
-
-    def __setitem__(self, key, value):
-        if not self.engine.caching:
-            super().__setitem__(key, value)
-            return
-        (branch, tick) = self.engine.time
-        cache_set(
-            self._statcache,
-            self._keycache,
-            branch,
-            tick,
-            key,
-            value,
-            super().__setitem__
-        )
-        self._stat_set(key, value)
-
-    def __delitem__(self, key):
-        if not self.engine.caching:
-            super().__delitem__(key)
-            return
-        (branch, tick) = self.engine.time
-        cache_del(
-            self._statcache,
-            self._keycache,
-            branch,
-            tick,
-            key,
-            super().__delitem__
-        )
-        self._stat_del(key)
+            return super().__getitem__(key)
 
     def _get_json_dict(self):
         (branch, tick) = self.engine.time

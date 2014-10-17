@@ -274,7 +274,13 @@ def inittest(
     def go2kobold(engine, character, thing):
         thing.travel_to(character.thing['kobold']['location'])
 
-    go2kobold.prereqs = ['kobold_alive', 'aware']
+    # triggers and prereqs are in different 'namespaces' (actually
+    # database tables)
+    @go2kobold.prereq
+    def kobold_alive(engine, character, thing):
+        return 'kobold' in character.thing
+
+    go2kobold.prereqs.append('aware')
 
     @dwarf.rule
     def wander(engine, character, thing):

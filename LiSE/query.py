@@ -156,6 +156,20 @@ class QueryEngine(gorm.query.QueryEngine):
                     yield rule
                 seen.add(rule)
 
+    def active_rules_except_rulebooks(self, rulebooks, branch, tick):
+        qms = ", ".join("?" for book in rulebooks)
+        seen = set()
+        for (b, t) in self.active_branches(branch, tick):
+            for (rule, active) in self.sql(
+                    branch,
+                    tick,
+                    *rulebooks,
+                    qms=qms
+            ):
+                if active and rule not in seen:
+                    yield rule
+                seen.add(rule)
+
     def active_rule_rulebook(self, rulebook, rule, branch, tick):
         for (b, t) in self.active_branches(branch, tick):
             for (active,) in self.sql(
@@ -200,19 +214,31 @@ class QueryEngine(gorm.query.QueryEngine):
                 'rule_upd_fmt', active, rulebook, rule, branch, tick
             )
 
-    def poll_rules(self, branch, tick):
+    def poll_char_rules(self, branch, tick):
+        # character rules
         for rulemap in ('character', 'avatar', 'thing', 'place', 'portal'):
             seen = set()
             for (b, t) in self.active_branches(branch, tick):
-                for (c, rulebook, rule, active, handled) in self.sql(
-                        'poll_rules_fmt', b, t, b, t, tbl=rulemap
+                for (c, rulebook, rule, active) in self.sql(
+                        'poll_char_rules_fmt', b, t, b, t, tbl=rulemap
                 ):
                     if (c, rulebook, rule) in seen:
                         continue
                     seen.add((c, rulebook, rule))
-                    character = json_load(c)
                     if active:
-                        yield (rulemap, character, rulebook, rule)
+                        yield (rulemap, json_load(c), rulebook, rule)
+
+    def poll_node_rules(self, branch, tick):
+        seen = set()
+        for (b, t) in self.active_branches(branch, tick):
+            for (c, n, rulebook, rule, active) in self.sql(
+                    'poll_node_rules', b, t, b, t
+            ):
+                if (c, n, rulebook, rule) in seen:
+                    continue
+                seen.add((c, n, rulebook, rule))
+                if active:
+                    yield (json_load(c), json_load(n), rulebook, rule)
 
     def handled_rule(self, ruletyp, character, rulebook, rule, branch, tick):
         character = json_dump(character)
@@ -224,6 +250,18 @@ class QueryEngine(gorm.query.QueryEngine):
             branch,
             tick,
             ruletyp=ruletyp
+        )
+
+    def handled_node_rule(self, character, node, rulebook, rule, branch, tick):
+        (character, node) = map(json_dump, (character, node))
+        self.sql(
+            'node_rule_handled',
+            character,
+            node,
+            rulebook,
+            rule,
+            branch,
+            tick
         )
 
     def node_is_thing(self, character, node, branch, tick):
@@ -244,7 +282,22 @@ class QueryEngine(gorm.query.QueryEngine):
         raise KeyError("No rulebook")
 
     def upd_rulebook_char(self, rulemap, character):
+        character = json_dump(character)
         return self.sql('upd_rulebook_char_fmt', character, rulemap=rulemap)
+
+    def node_rulebook_get(self, character, node):
+        (character, node) = map(json_dump, (character, node))
+        try:
+            return self.sql('node_rulebook_get', character, node).fetchone()[0]
+        except TypeError:
+            return None
+
+    def node_rulebook_set(self, character, node, rulebook):
+        (character, node) = map(json_dump, (character, node))
+        try:
+            self.sql('node_rulebook_ins', character, node, rulebook)
+        except IntegrityError:
+            self.sql('node_rulebook_upd', rulebook, character, node)
 
     def avatar_users(self, graph, node, branch, tick):
         (graph, node) = map(json_dump, (graph, node))
@@ -737,6 +790,22 @@ class QueryEngine(gorm.query.QueryEngine):
                 "character_graph, "
                 "avatar_graph, "
                 "avatar_node)"
+                ";"
+            )
+        try:
+            cursor.execute("SELECT * FROM node_rules_handled;")
+        except OperationalError:
+            cursor.execute(
+                "CREATE TABLE node_rules_handled ("
+                "character TEXT NOT NULL, "
+                "node TEXT NOT NULL, "
+                "rulebook TEXT NOT NULL, "
+                "rule TEXT NOT NULL, "
+                "branch TEXT NOT NULL DEFAULT 'master', "
+                "tick INTEGER NOT NULL DEFAULT 0, "
+                "PRIMARY KEY(character, node, rule, branch, tick), "
+                "FOREIGN KEY(character, node) "
+                "REFERENCES nodes(graph, node))"
                 ";"
             )
         handled = (
