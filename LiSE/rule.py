@@ -43,6 +43,18 @@ class Rule(object):
             self.prereqs.extend(prereqs)
         if actions:
             self.actions.extend(actions)
+        self._initted = True
+
+    def __setattr__(self, k, v):
+        if hasattr(self, '_initted') and k in (
+                'triggers', 'prereqs', 'actions'
+        ):
+            l = getattr(self, k)
+            while l:
+                del l[0]
+            l.extend(v)
+            return
+        super().__setattr__(k, v)
 
     def __call__(self, engine, *args):
         """If at least one trigger fires, check the prereqs. If all the
