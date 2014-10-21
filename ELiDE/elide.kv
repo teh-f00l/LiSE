@@ -7,12 +7,33 @@
 <Pawn>:
     engine: self.board.layout.app.engine
     selected: self.board.layout.selected is self
+<ArrowWidget>:
+    engine: self.board.layout.app.engine if self.board and self.board.layout else None
+    selected: self.board.layout.selected is self if self.board and self.board.layout else False
+    canvas:
+        Color:
+            id: bg_color
+            rgba: root.board.arrow_bg if root.board else [0,0,0,0]
+        Line:
+            id: bg_line
+            width: root.w * 1.4
+            points: root.points
+        Color:
+            id: fg_color
+            rgba: root.board.arrow_fg if root.board else [0,0,0,0]
+        Line:
+            id: fg_line
+            width: root.w
+            points: root.points
 <Arrow>:
-    engine: self.board.layout.app.engine
-    selected: self.board.layout.selected is self
+    origin: self.board.spot[self.portal['origin']]
+    destination: self.board.spot[self.portal['destination']]
+<Dummy>:
+    name: "".join((self.prefix, str(self.num)))
 <ELiDELayout>:
     engine: self.app.engine
     board: board
+    dummies: [dummything, dummyplace]
     ScrollView:
         effect_cls: StiffScrollEffect
         id: boardview
@@ -101,10 +122,36 @@
             text: "Undo"
         Button:
             # Should have orb.png in it and if you drag that elsewhere it creates a new place there
-            id: placeadder
+            id: placeaddbut
+            Dummy:
+                id: dummyplace
+                center: placeaddbut.center
+                prefix: 'place'
+                paths: ['orb.png']
+                on_pos_up: root.spot_from_dummy(self)
         ToggleButton:
             # While this is active, dragging between two spots creates a portal
-            id: portaladder
+            id: portaladdbut
+            ArrowWidget:
+                board: board
+                origin: emptyleft
+                destination: emptyright
+                Widget:
+                    id: emptyleft
+                    center_x: portaladdbut.x + portaladdbut.width / 3
+                    center_y: portaladdbut.center_y
+                    size: (0, 0)
+                Widget:
+                    id: emptyright
+                    center_x: portaladdbut.right - portaladdbut.width / 3
+                    center_y: portaladdbut.center_y
+                    size: (0, 0)
         Button:
             # Has the generic thing-graphic in it, drag it on top of a spot and you get a new thing
-            id: thingadder
+            id: thingaddbut
+            Dummy:
+                id: dummything
+                center: thingaddbut.center
+                prefix: 'thing'
+                paths: ['atlas://rltiles/base.atlas/unseen']
+                on_pos_up: root.pawn_from_dummy(self)

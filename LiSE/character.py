@@ -311,6 +311,21 @@ class CharacterPlaceMapping(CharacterThingPlaceMapping):
                 self._cache[place] = Place(self.character, place)
             pl = self._cache[place]
         (branch, tick) = self.engine.time
+        if branch not in self._keycache:
+            self._keycache[branch] = {}
+        if tick in self._keycache[branch]:
+            self._keycache[branch][tick].add(place)
+        else:
+            try:
+                self._keycache[branch][tick] = set(
+                    self._keycache[branch][max(
+                        t for t in self._keycache[branch]
+                        if t < tick
+                    )]
+                )
+                self._keycache[branch][tick].add(place)
+            except ValueError:
+                pass
         self.engine.db.exist_node(
             self.character.name,
             place,
@@ -474,7 +489,7 @@ class CharacterPortalSuccessorsMapping(GraphSuccessorsMapping, RuleFollower):
             self.engine.db.exist_edge(
                 self.graph,
                 self.nodeA,
-                self.nodeB,
+                nodeB,
                 0,
                 branch,
                 tick,
@@ -1446,6 +1461,10 @@ class Character(DiGraph, RuleFollower, StatSet):
         super(Character, self).add_edge(origin, destination, **kwargs)
         if symmetrical:
             self.add_portal(destination, origin, is_mirror=True)
+
+    def new_portal(self, origin, destination, symmetrical=False, **kwargs):
+        self.add_portal(origin, destination, symmetrical, **kwargs)
+        return self.portal[origin][destination]
 
     def add_portals_from(self, seq, symmetrical=False):
         """Take a sequence of (origin, destination) pairs and make a

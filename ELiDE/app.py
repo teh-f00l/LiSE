@@ -5,22 +5,28 @@ from kivy.logger import Logger
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.properties import (
+    BooleanProperty,
     NumericProperty,
     BoundedNumericProperty,
     ObjectProperty,
     StringProperty,
-    DictProperty
+    DictProperty,
+    ListProperty,
+    ReferenceListProperty
 )
 from kivy.resources import resource_add_path
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.textinput import TextInput
+from kivy.uix.widget import Widget
 
 from kivy.factory import Factory
 
 from .board import Board
+from .board.arrow import ArrowWidget
 
 import LiSE
 import ELiDE
+from ELiDE.texturestack import ImageStack
 
 resource_add_path(ELiDE.__path__[0] + "/assets")
 
@@ -28,19 +34,85 @@ resource_add_path(ELiDE.__path__[0] + "/assets")
 Factory.register('Board', cls=Board)
 
 
+class MouseFollower(Widget):
+    boardview = ObjectProperty()
+
+    def on_touch_move(self, touch):
+        self.center = self.boardview.to_local(*touch.pos)
+        return True
+
+
+class Dummy(ImageStack):
+    _touch = ObjectProperty(None, allownone=True)
+    name = StringProperty()
+    prefix = StringProperty()
+    num = NumericProperty()
+    x_start = NumericProperty()
+    y_start = NumericProperty()
+    pos_start = ReferenceListProperty(x_start, y_start)
+    x_down = NumericProperty()
+    y_down = NumericProperty()
+    pos_down = ReferenceListProperty(x_down, y_down)
+    x_up = NumericProperty()
+    y_up = NumericProperty()
+    pos_up = ReferenceListProperty(x_up, y_up)
+    x_center_up = NumericProperty()
+    y_center_up = NumericProperty()
+    center_up = ReferenceListProperty(x_center_up, y_center_up)
+    right_up = NumericProperty()
+    top_up = NumericProperty()
+
+    def on_pos_up(self, *args):
+        self.x_center_up = self.x_up + self.width / 2
+        self.y_center_up = self.y_up + self.height / 2
+        self.right_up = self.x_up + self.width
+        self.top_up = self.y_up + self.height
+
+    def on_touch_down(self, touch):
+        if not self.collide_point(*touch.pos):
+            return False
+        self.pos_start = self.pos
+        self.pos_down = (
+            self.x - touch.x,
+            self.y - touch.y
+        )
+        touch.grab(self)
+        self._touch = touch
+        return True
+
+    def on_touch_move(self, touch):
+        if touch is not self._touch:
+            return False
+        self.pos = (
+            touch.x + self.x_down,
+            touch.y + self.y_down
+        )
+        return True
+
+    def on_touch_up(self, touch):
+        if touch is not self._touch:
+            return False
+        self.pos_up = self.pos
+        self.pos = self.pos_start
+        self._touch = None
+        return True
+
+
 class ELiDELayout(FloatLayout):
     """A master layout that contains one board and some menus
     and charsheets.
 
-    This contains three elements: a board, a menu, and a character
-    sheet. This class has some support methods for handling
-    interactions with the menu and the character sheet, but if neither
-    of those happen, the board handles touches on its own.
+    This contains three elements: a scrollview (containing the board),
+    a menu, and the time control panel. This class has some support methods
+    for handling interactions with the menu and the character sheet,
+    but if neither of those happen, the scrollview handles touches on its
+    own.
 
     """
     app = ObjectProperty()
     """The App instance that is running and thus holds the globals I need."""
     board = ObjectProperty()
+    dummies = ListProperty()
     _touch = ObjectProperty(None, allownone=True)
     popover = ObjectProperty()
     """The modal view to use for the various menus that aren't visible by
@@ -48,6 +120,7 @@ class ELiDELayout(FloatLayout):
     portaling = BoundedNumericProperty(0, min=0, max=2)
     """Count how far along I am in the process of connecting two Places by
     creating a Portal between them."""
+    reciprocal_portal = BooleanProperty(False)
     grabbed = ObjectProperty(None, allownone=True)
     """Thing being grabbed"""
     selected = ObjectProperty(None, allownone=True)
@@ -57,6 +130,78 @@ class ELiDELayout(FloatLayout):
     branch = StringProperty()
     tick = NumericProperty()
     rules_per_frame = BoundedNumericProperty(10, min=1)
+
+    def on_dummies(self, *args):
+        if self.board is None or self.board.character is None:
+            Clock.schedule_once(self.on_dummies, 0)
+            return
+        for dummy in self.dummies:
+            if hasattr(dummy, '_numbered'):
+                continue
+            num = 0
+            for nodename in self.board.character.node:
+                nodename = str(nodename)
+                if not nodename.startswith(dummy.prefix):
+                    continue
+                try:
+                    nodenum = int(nodename.lstrip(dummy.prefix))
+                except ValueError:
+                    continue
+                num = max((nodenum, num))
+            dummy.num = num + 1
+            dummy._numbered = True
+
+    def spot_from_dummy(self, dummy):
+        (x, y) = self.ids.boardview.to_local(*dummy.pos_up)
+        x /= self.board.width
+        y /= self.board.height
+        self.board.spotlayout.add_widget(
+            self.board.make_spot(
+                self.board.character.new_place(
+                    dummy.name,
+                    _x=x,
+                    _y=y,
+                    _image_paths=dummy.paths
+                )
+            )
+        )
+        dummy.num += 1
+
+    def pawn_from_dummy(self, dummy):
+        dummy.pos = self.ids.boardview.to_local(*dummy.pos)
+        for spot in self.board.spotlayout.children:
+            if spot.collide_widget(dummy):
+                whereat = spot
+                break
+        else:
+            return
+        whereat.add_widget(
+            self.board.make_pawn(
+                self.board.character.new_thing(
+                    dummy.name,
+                    whereat.place.name,
+                    _image_paths=dummy.paths
+                )
+            )
+        )
+        dummy.num += 1
+
+    def arrow_from_wid(self, wid):
+        for spot in self.board.spotlayout.children:
+            if spot.collide_widget(wid):
+                whereto = spot
+                break
+        else:
+            return
+        self.board.arrowlayout.add_widget(
+            self.board.make_arrow(
+                self.board.character.new_portal(
+                    self.grabbed.place.name,
+                    whereto.place.name,
+                    reciprocal=self.reciprocal_portal
+                )
+            )
+        )
 
     def on_engine(self, *args):
         """Set my branch and tick to that of my engine, and bind them so that
@@ -185,6 +330,22 @@ class ELiDELayout(FloatLayout):
         if self.grabbed is None:
             return self.ids.boardview.dispatch('on_touch_down', touch)
         else:
+            if (
+                    hasattr(self.grabbed, 'place') and
+                    self.ids.portaladdbut.state == 'down'
+            ):
+                self.mouse_follower = Widget(
+                    size_hint=(None, None),
+                    size=(1, 1),
+                    pos=self.ids.boardview.to_local(*touch.pos)
+                )
+                self.board.add_widget(self.mouse_follower)
+                self.dummy_arrow = ArrowWidget(
+                    board=self.board,
+                    origin=self.grabbed,
+                    destination=self.mouse_follower
+                )
+                self.board.add_widget(self.dummy_arrow)
             return True
 
     def on_touch_move(self, touch):
@@ -194,11 +355,22 @@ class ELiDELayout(FloatLayout):
         """
         if self.grabbed is None:
             return self.ids.boardview.dispatch('on_touch_move', touch)
+        elif hasattr(self, 'mouse_follower'):
+            self.mouse_follower.pos = self.ids.boardview.to_local(
+                *touch.pos
+            )
+            return True
         else:
             return self.grabbed.dispatch('on_touch_move', touch)
 
     def on_touch_up(self, touch):
         """Dispatch everywhere, and set my ``grabbed`` to ``None``"""
+        if hasattr(self, 'mouse_follower'):
+            self.arrow_from_wid(self.mouse_follower)
+            self.board.remove_widget(self.dummy_arrow)
+            self.board.remove_widget(self.mouse_follower)
+            del self.dummy_arrow
+            del self.mouse_follower
         self.ids.charmenu.dispatch('on_touch_up', touch)
         self.ids.timemenu.dispatch('on_touch_up', touch)
         self.ids.boardview.dispatch('on_touch_up', touch)
@@ -308,5 +480,6 @@ class ELiDEApp(App):
 
     def stop(self, *largs):
         """Sync the database, wrap up the game, and halt."""
+        self.engine.commit()
         self.engine.close()
         super().stop(*largs)

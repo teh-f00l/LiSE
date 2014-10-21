@@ -36,7 +36,7 @@ class Board(RelativeLayout):
         self._trigger_update = Clock.create_trigger(self._update)
         super().__init__(**kwargs)
 
-    def _make_pawn(self, thing):
+    def make_pawn(self, thing):
         """Make a :class:`Pawn` to represent a :class:`Thing`"""
         if thing["name"] in self.pawn:
             raise KeyError("Already have a Pawn for this Thing")
@@ -47,7 +47,7 @@ class Board(RelativeLayout):
         self.pawn[thing["name"]] = r
         return r
 
-    def _make_spot(self, place):
+    def make_spot(self, place):
         """Make a :class:`Spot` to represent a :class:`Place`"""
         if place["name"] in self.spot:
             raise KeyError("Already have a Spot for this Place")
@@ -58,7 +58,7 @@ class Board(RelativeLayout):
         self.spot[place["name"]] = r
         return r
 
-    def _make_arrow(self, portal):
+    def make_arrow(self, portal):
         """Make an :class:`Arrow` to represent a :class:`Portal`"""
         if (
                 portal["origin"] not in self.spot or
@@ -168,7 +168,7 @@ class Board(RelativeLayout):
         for place_name in self.character.place:
             if place_name not in self.spot:
                 self.spotlayout.add_widget(
-                    self._make_spot(self.character.place[place_name])
+                    self.make_spot(self.character.place[place_name])
                 )
         if self.spots_unposd == len(self.spot):
             # No spots have positions;
@@ -189,13 +189,13 @@ class Board(RelativeLayout):
                         arrow_dest not in self.arrow[arrow_orig]
                 ):
                     self.arrowlayout.add_widget(
-                        self._make_arrow(
+                        self.make_arrow(
                             self.character.portal[arrow_orig][arrow_dest]
                         )
                     )
         for thing_name in self.character.thing:
             if thing_name not in self.pawn:
-                pwn = self._make_pawn(self.character.thing[thing_name])
+                pwn = self.make_pawn(self.character.thing[thing_name])
                 try:
                     whereat = self.arrow[
                         pwn.thing['location']
@@ -226,17 +226,14 @@ class Board(RelativeLayout):
             if pawn.dispatch('on_touch_down', touch):
                 return True
             if pawn.collide_point(*touch.pos):
-                touch.grab(pawn)
                 pawn._touch = touch
                 self.layout.grabbed = pawn
                 return True
         for child in self.spotlayout.children:
             if child.dispatch('on_touch_down', touch):
-                touch.grab(child)
                 self.layout.grabbed = child
                 return True
         for child in self.arrowlayout.children:
             if child.dispatch('on_touch_down', touch):
-                touch.grab(child)
                 self.layout.grabbed = child
                 return True
