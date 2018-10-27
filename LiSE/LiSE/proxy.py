@@ -1,5 +1,18 @@
 # This file is part of LiSE, a framework for life simulation games.
-# Copyright (c) Zachary Spector,  public@zacharyspector.com
+# Copyright (c) Zachary Spector, public@zacharyspector.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Proxy objects to access LiSE entities from another process.
 
 Each proxy class is meant to emulate the equivalent LiSE class,
@@ -9,7 +22,6 @@ entity in the LiSE core.
 """
 import sys
 import logging
-from os import getpid
 from abc import abstractmethod
 from random import Random
 from collections import (
@@ -21,23 +33,24 @@ from functools import partial
 from threading import Thread, Lock
 from multiprocessing import Process, Pipe, Queue, ProcessError
 from queue import Empty
+
 from blinker import Signal
 
-from allegedb.cache import HistoryError
+from allegedb.cache import HistoryError, PickyDefaultDict, StructuredDefaultDict
+from allegedb.wrap import DictWrapper, ListWrapper, SetWrapper, UnwrappingDict
 from .engine import AbstractEngine
 from .character import Facade, AbstractCharacter
-from allegedb.wrap import DictWrapper, ListWrapper, SetWrapper
 from .util import reify, getatt
-from allegedb.cache import PickyDefaultDict, StructuredDefaultDict
 from .handle import EngineHandle
 from .xcollections import AbstractLanguageDescriptor
-from LiSE.node import NodeContent, UserMapping, UserDescriptor
-from LiSE.place import Place
-from LiSE.thing import Thing
-from LiSE.portal import Portal
+from .node import NodeContent, UserMapping, UserDescriptor
+from .place import Place
+from .thing import Thing
+from .portal import Portal
 
 
 class CachingProxy(MutableMapping, Signal):
+    """Abstract class for proxy objects representing LiSE entities or mappings thereof"""
     def __init__(self):
         super().__init__()
         self.exists = True
@@ -97,6 +110,7 @@ class CachingProxy(MutableMapping, Signal):
 
 
 class CachingEntityProxy(CachingProxy):
+    """Abstract class for proxy objects representing LiSE entities"""
     def _cache_get_munge(self, k, v):
         if isinstance(v, dict):
             return DictWrapper(lambda: self._cache[k], partial(self._set_item, k), self, k)
@@ -107,12 +121,13 @@ class CachingEntityProxy(CachingProxy):
         return v
 
     def __repr__(self):
-        return "{}({}) {}".format(
-            self.__class__.__name__, self._cache, self.name
+        return "<{}({}) {} at {}>".format(
+            self.__class__.__name__, self._cache, self.name, id(self)
         )
 
 
 class RulebookProxyDescriptor(object):
+    """Descriptor that makes the corresponding RuleBookProxy if needed"""
     def __get__(self, inst, cls):
         if inst is None:
             return self
@@ -139,6 +154,7 @@ class RulebookProxyDescriptor(object):
 
 
 class ProxyUserMapping(UserMapping):
+    """A mapping to the ``CharacterProxy`` objects that have this node as an avatar"""
     def _user_names(self):
         for user, avatars in self.node.engine._avatar_characters_cache[self.node._charname].items():
             if self.node.name in avatars:
@@ -255,9 +271,10 @@ class NodeProxy(CachingEntityProxy):
 
 class PlaceProxy(NodeProxy):
     def __repr__(self):
-        return "proxy to {}.place[{}]".format(
+        return "<proxy to {}.place[{}] at {}>".format(
             self._charname,
-            self.name
+            repr(self.name),
+            id(self)
         )
 
 
@@ -284,41 +301,22 @@ class ThingProxy(NodeProxy):
             raise TypeError("Location must be a node or the name of one")
         self._set_location(locn)
 
-    @property
-    def next_location(self):
-        if self._next_location is None:
-            return None
-        return self.engine.character[self._charname].node[self._next_location]
-
     def __init__(
-            self, character, name, location=None, next_location=None,
-            arrival_time=None, next_arrival_time=None
+            self, character, name, location=None, **kwargs
     ):
         if location is None and getattr(character.engine, '_initialized', True):
             raise ValueError("Thing must have location")
         super().__init__(character, name)
         self._location = location
-        self._next_location = next_location
-        self._arrival_time = arrival_time or character.engine.turn
-        self._next_arrival_time = next_arrival_time
+        self._cache.update(kwargs)
 
     def __iter__(self):
         yield from super().__iter__()
-        yield from {
-            'location',
-            'next_location',
-            'arrival_time',
-            'next_arrival_time'
-        }
+        yield 'location'
 
     def __getitem__(self, k):
-        if k in {
-                'location',
-                'next_location',
-                'arrival_time',
-                'next_arrival_time'
-        }:
-            return getattr(self, '_' + k)
+        if k == 'location':
+            return self._location
         return super().__getitem__(k)
 
     def _apply_delta(self, delta):
@@ -327,8 +325,8 @@ class ThingProxy(NodeProxy):
                 if k in self._cache:
                     del self._cache[k]
                     self.send(self, key=k, value=None)
-            elif k in {'location', 'next_location'}:
-                setattr(self, '_'+k, v)
+            elif k == 'location':
+                self._location = v
                 self.send(self, key=k, value=v)
             elif k not in self._cache or self._cache[k] != v:
                 self._cache[k] = v
@@ -349,23 +347,15 @@ class ThingProxy(NodeProxy):
     def __setitem__(self, k, v):
         if k == 'location':
             self._set_location(v)
-        elif k in {'next_location', 'arrival_time', 'next_arrival_time'}:
-            raise ValueError("Read-only")
         else:
             super().__setitem__(k, v)
 
     def __repr__(self):
-        if self._next_location is not None:
-            return "proxy to {}.thing[{}]@{}->{}".format(
-                self._charname,
-                self.name,
-                self._location,
-                self._next_location
-            )
-        return "proxy to {}.thing[{}]@{}".format(
+        return "<proxy to {}.thing[{}]@{} at {}>".format(
             self._charname,
             self.name,
-            self._location
+            self._location,
+            id(self)
         )
 
     def follow_path(self, path, weight=None):
@@ -511,10 +501,11 @@ class PortalProxy(CachingEntityProxy):
         )
 
     def __repr__(self):
-        return "proxy to {}.portal[{}][{}]".format(
+        return "<proxy to {}.portal[{}][{}] at {}>".format(
             self._charname,
-            self._origin,
-            self._destination
+            repr(self._origin),
+            repr(self._destination),
+            id(self)
         )
 
     def __getitem__(self, k):
@@ -594,14 +585,24 @@ class NodeMapProxy(MutableMapping, Signal):
         The patch is sent to the LiSE core all at once, so this is faster than
         using ``update``, too.
 
+        :param patch: a dictionary. Keys are node names, values are other dicts
+        describing updates to the nodes, where a value of None means delete the stat.
+        Other values overwrite.
+
         """
         self.engine.handle(
             'update_nodes',
             char=self.character.name,
-            patch=patch
+            patch=patch,
+            block=False
         )
-        for node, pat in patch.items():
-            self[node]._cache.update(pat)
+        for node, stats in patch.items():
+            nodeproxycache = self[node]._cache
+            for k, v in stats.items():
+                if v is None:
+                    del nodeproxycache[k]
+                else:
+                    nodeproxycache[k] = v
 
 
 class ThingMapProxy(CachingProxy):
@@ -658,9 +659,7 @@ class ThingMapProxy(CachingProxy):
             branching=True
         )
         self._cache[k] = ThingProxy(
-            self.engine, self.name,
-            v.pop('location'), v.pop('next_location', None),
-            v.pop('arrival_time', None), v.pop('next_arrival_time', None)
+            self.engine, self.name, v.pop('location')
         )
         self.engine._node_stat_cache[self.name][k] = v
 
@@ -813,7 +812,7 @@ class CharSuccessorsMappingProxy(CachingProxy):
 
     @property
     def character(self):
-        return self.engine.character[self.character.name]
+        return self.engine.character[self.name]
 
     @property
     def _cache(self):
@@ -847,19 +846,21 @@ class CharSuccessorsMappingProxy(CachingProxy):
         )
 
     def _apply_delta(self, delta):
-        for ((o, d), ex) in delta.items():
-            if ex:
-                if d not in self._cache[o]:
-                    self._cache[o][d] = PortalProxy(
-                        self.engine,
-                        self.name,
-                        o, d
-                    )
-            else:
-                if o in self._cache and d in self._cache[o]:
-                    del self._cache[o][d]
-                    if len(self._cache[o]) == 0:
-                        del self._cache[o]
+        for o, ds in delta.items():
+            for d, ex in ds.items():
+                if ex:
+                    if o not in self._cache:
+                        self._cache[o] = {}
+                    if d not in self._cache[o]:
+                        self._cache[o][d] = PortalProxy(
+                            self.character,
+                            o, d
+                        )
+                else:
+                    if o in self._cache and d in self._cache[o]:
+                        del self._cache[o][d]
+                        if len(self._cache[o]) == 0:
+                            del self._cache[o]
 
     def _set_item(self, orig, val):
         self.engine.handle(
@@ -1037,7 +1038,7 @@ class RuleProxy(Signal):
 
     @property
     def _cache(self):
-        return self.engine._rules_cache[self.name]
+        return self.engine._rules_cache.setdefault(self.name, {})
 
     @property
     def triggers(self):
@@ -1317,9 +1318,7 @@ class CharacterProxy(AbstractCharacter):
                     nodeval = delta.get('node_val', {}).get(node, None)
                     if nodeval and 'location' in nodeval:
                         self.thing._cache[node] = prox = ThingProxy(
-                            self, node, nodeval['location'],
-                            nodeval.get('next_location'), nodeval.get('arrival_time'),
-                            nodeval.get('next_arrival_time')
+                            self, node, nodeval['location']
                         )
                         self.thing.send(self.thing, key=node, value=prox)
                     else:
@@ -1340,7 +1339,7 @@ class CharacterProxy(AbstractCharacter):
                 self.node.send(self.node, key=node, value=None)
         self.portal._apply_delta(delta.pop('edges', {}))
         for (node, nodedelta) in delta.pop('node_val', {}).items():
-            if node not in self.engine._node_stat_cache[self.name]:
+            if node not in self.node or node not in self.engine._node_stat_cache[self.name]:
                 self.engine._node_stat_cache[self.name][node] = nodedelta
             else:
                 self.node[node]._apply_delta(nodedelta)
@@ -1392,20 +1391,18 @@ class CharacterProxy(AbstractCharacter):
     def add_nodes_from(self, seq):
         self.add_places_from(seq)
 
-    def add_thing(self, name, location, next_location=None, **kwargs):
+    def add_thing(self, name, location, **kwargs):
         self.engine.handle(
             command='add_thing',
             char=self.name,
             thing=name,
             loc=location,
-            next_loc=next_location,
             statdict=kwargs,
             block=False,
             branching=True
         )
         self.thing._cache[name] = ThingProxy(
-            self.engine, self.name, name, location, next_location,
-            self.engine.tick, None
+            self, name, location, **kwargs
         )
 
     def add_things_from(self, seq):
@@ -1425,17 +1422,16 @@ class CharacterProxy(AbstractCharacter):
         self.add_place(name, **kwargs)
         return self.place[name]
 
-    def new_thing(self, name, location, next_location=None, **kwargs):
-        self.add_thing(name, location, next_location, **kwargs)
+    def new_thing(self, name, location, **kwargs):
+        self.add_thing(name, location, **kwargs)
         return self.thing[name]
 
-    def place2thing(self, node, location, next_location=None):
+    def place2thing(self, node, location):
         self.engine.handle(
             command='place2thing',
             char=self.name,
             node=node,
             loc=location,
-            next_loc=next_location,
             block=False,
             branching=True
         )
@@ -1690,6 +1686,8 @@ class GlobalVarProxy(MutableMapping, Signal):
     def _update_cache(self, data):
         for k, v in data.items():
             if v is None:
+                if k not in self._cache:
+                    continue
                 del self._cache[k]
                 self.send(self, key=k, value=None)
             else:
@@ -1807,6 +1805,11 @@ class FuncStoreProxy(Signal):
             command='del_source', store=self._store, k=func_name, block=False
         )
         del self._cache[func_name]
+
+    def get_source(self, func_name):
+        return self.engine.handle(
+            command='get_source', store=self._store, name=func_name
+        )
 
 
 class ChangeSignatureError(TypeError):
@@ -1958,6 +1961,7 @@ class EngineProxy(AbstractEngine):
         self._handle_in = handle_in
         self._handle_in_lock = Lock()
         self._handle_lock = Lock()
+        self._commit_lock = Lock()
         self.send(self.pack({'command': 'get_watched_btt'}))
         self._branch, self._turn, self._tick = self.unpack(self.recv()[-1])
         self.logger = logger
@@ -1980,9 +1984,9 @@ class EngineProxy(AbstractEngine):
             # not silenced; mustn't do anything before the game has started
             self.handle('do_game_start')
 
-        self._node_stat_cache = StructuredDefaultDict(1, dict)
-        self._portal_stat_cache = StructuredDefaultDict(2, dict)
-        self._char_stat_cache = PickyDefaultDict(dict)
+        self._node_stat_cache = StructuredDefaultDict(1, UnwrappingDict)
+        self._portal_stat_cache = StructuredDefaultDict(2, UnwrappingDict)
+        self._char_stat_cache = PickyDefaultDict(UnwrappingDict)
         self._things_cache = StructuredDefaultDict(1, ThingProxy)
         self._character_places_cache = StructuredDefaultDict(1, PlaceProxy)
         self._character_rulebooks_cache = StructuredDefaultDict(
@@ -2059,9 +2063,7 @@ class EngineProxy(AbstractEngine):
                         noded = self._node_stat_cache[char].get(node)
                         if noded and 'location' in noded:
                             self._things_cache[char][node] = ThingProxy(
-                                character, node, noded['location'],
-                                noded.get('next_location'), noded.get('arrival_time'),
-                                noded.get('next_arrival_time')
+                                character, node, noded['location']
                             )
                         else:
                             self._character_places_cache[char][node] = PlaceProxy(
@@ -2186,7 +2188,6 @@ class EngineProxy(AbstractEngine):
                 "Sent command {} but received results for {}".format(
                     cmd, command
                 )
-            self._handle_lock.release()
             r = self.unpack(result)
             if (branch, turn, tick) != self.btt():
                 self._branch = branch
@@ -2194,9 +2195,11 @@ class EngineProxy(AbstractEngine):
                 self._tick = tick
                 self.time.send(self, branch=branch, turn=turn, tick=tick)
             if isinstance(r, Exception):
+                self._handle_lock.release()
                 raise r
             if cb:
-                cb(command, branch, turn, tick, **r)
+                cb(command=command, branch=branch, turn=turn, tick=tick, result=r)
+            self._handle_lock.release()
             return r
         else:
             kwargs['silent'] = not (branching or cb)
@@ -2218,7 +2221,18 @@ class EngineProxy(AbstractEngine):
     def _callback(self, cb):
         command, branch, turn, tick, result = self.recv()
         self._handle_lock.release()
-        cb(command, branch, turn, tick, self.unpack(result))
+        res = self.unpack(result)
+        ex = None
+        if isinstance(res, Exception):
+            ex = res
+        try:
+            if isinstance(res[0], Exception):
+                ex = res[0]
+        except TypeError:
+            pass
+        if ex:
+            self.warning("{} raised by command {}, trying to run callback {} with it".format(repr(ex), command, cb))
+        cb(command=command, branch=branch, turn=turn, tick=tick, result=res)
 
     def _branching(self, cb=None):
         command, branch, turn, tick, result = self.recv()
@@ -2230,20 +2244,22 @@ class EngineProxy(AbstractEngine):
             self._tick = tick
             self.time.send(self, branch=branch, turn=turn, tick=tick)
             if hasattr(self, 'branching_cb'):
-                self.branching_cb(command, branch, turn, tick, **r)
+                self.branching_cb(command=command, branch=branch, turn=turn, tick=tick, result=r)
         if cb:
-            cb(command, branch, turn, tick, **r)
+            cb(command=command, branch=branch, turn=turn, tick=tick, result=r)
 
     def _call_with_recv(self, *cbs, **kwargs):
         cmd, branch, turn, tick, res = self.recv()
         received = self.unpack(res)
+        if isinstance(received, Exception):
+            raise received
         for cb in cbs:
-            cb(cmd, branch, turn, tick, received, **kwargs)
+            cb(command=cmd, branch=branch, turn=turn, tick=tick, result=received, **kwargs)
         return received
 
-    def _upd_caches(self, *args, **kwargs):
+    def _upd_caches(self, command, branch, turn, tick, result, no_del=False):
         deleted = set(self.character.keys())
-        result, deltas = args[-1]
+        result, deltas = result
         self.eternal._update_cache(deltas.pop('eternal', {}))
         self.universal._update_cache(deltas.pop('universal', {}))
         # I think if you travel back to before a rule was created it'll show up empty
@@ -2274,7 +2290,7 @@ class EngineProxy(AbstractEngine):
             chara = self.character[char]
             chara._apply_delta(chardelta)
             deleted.discard(char)
-        if kwargs.get('no_del'):
+        if no_del:
             return
         for char in deleted:
             del self._char_cache[char]
@@ -2282,7 +2298,7 @@ class EngineProxy(AbstractEngine):
     def btt(self):
         return self._branch, self._turn, self._tick
 
-    def _set_time(self, cmd, branch, turn, tick, res, **kwargs):
+    def _set_time(self, command, branch, turn, tick, result, **kwargs):
         self._branch = branch
         self._turn = turn
         self._tick = tick
@@ -2391,7 +2407,7 @@ class EngineProxy(AbstractEngine):
             )
             self._branch, self._turn, self._tick = branch, turn, tick
 
-    def add_character(self, char, data={}, **attr):
+    def add_character(self, char, data={}, block=False, **attr):
         if char in self._char_cache:
             raise KeyError("Character already exists")
         assert char not in self._char_stat_cache
@@ -2413,10 +2429,8 @@ class EngineProxy(AbstractEngine):
             if 'arrival_time' in stats or 'next_arrival_time' in stats:
                 raise ValueError('The arrival_time stats are read-only')
             loc = stats.pop('location')
-            nxtloc = stats.pop('next_location') \
-                     if 'next_location' in stats else None
             self._things_cache[char][thing] \
-                = ThingProxy(loc, nxtloc, self.engine.rev, None)
+                = ThingProxy(char, thing, loc)
             self._node_stat_cache[char][thing] = stats
         portdata = data.get('edge', data.get('portal', data.get('adj',  {})))
         for orig, dests in portdata.items():
@@ -2426,15 +2440,15 @@ class EngineProxy(AbstractEngine):
                 assert dest not in self._character_portals_cache[char][orig]
                 assert dest not in self._portal_stat_cache[char][orig]
                 self._character_portals_cache[char][orig][dest] \
-                    = PortalProxy(self.engine, char, orig, dest)
+                    = PortalProxy(self.engine.character[char], orig, dest)
                 self._portal_stat_cache[char][orig][dest] = stats
         self.handle(
             command='add_character', char=char, data=data, attr=attr,
-            block=False, branching=True
+            block=block, branching=True
         )
 
     def new_character(self, char, **attr):
-        self.add_character(char, **attr)
+        self.add_character(char, block=True, **attr)
         return self._char_cache[char]
     new_graph = new_character
 
@@ -2481,17 +2495,30 @@ class EngineProxy(AbstractEngine):
         )
 
     def commit(self):
-        self.handle('commit', block=False)
+        self._commit_lock.acquire()
+        self.handle('commit', block=False, cb=self._release_commit_lock)
+
+    def _release_commit_lock(self, *, command, branch, turn, tick, result):
+        self._commit_lock.release()
 
     def close(self):
-        self.handle(command='close')
+        self._commit_lock.acquire()
+        self._commit_lock.release()
+        self.handle('close')
         self.send('shutdown')
+
+    def _node_contents(self, character, node):
+        # very slow. do better
+        for thing in self.character[character].thing.values():
+            if thing['location'] == node:
+                yield thing.name
 
 
 def subprocess(
     args, kwargs, handle_out_pipe, handle_in_pipe, logq, loglevel
 ):
     def log(typ, data):
+        from os import getpid
         if typ == 'command':
             (cmd, kvs) = data
             logs = "LiSE proc {}: calling {}({})".format(

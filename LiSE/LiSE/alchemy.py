@@ -1,5 +1,18 @@
 # This file is part of LiSE, a framework for life simulation games.
-# Copyright (c) Zachary Spector,  public@zacharyspector.com
+# Copyright (c) Zachary Spector, public@zacharyspector.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """A script to generate the SQL needed for LiSE's database backend,
 and output it in JSON form.
 
@@ -13,7 +26,7 @@ where LiSE will look for it, as in:
 """
 from collections import OrderedDict
 from functools import partial
-from sqlalchemy import *
+from sqlalchemy import Table, Column, ForeignKeyConstraint, select, bindparam, func, and_, or_, INT, TEXT, BOOLEAN
 from sqlalchemy.sql.ddl import CreateTable, CreateIndex
 
 
@@ -224,9 +237,7 @@ def tables_for_meta(meta):
     # locations.
     #
     # A Thing's location can be either a Place or another Thing, as long
-    # as it's in the same Character. Things also have a
-    # ``next_location``, defaulting to ``None``, which when set
-    # indicates that the thing is in transit to that location.
+    # as it's in the same Character.
     Table(
         'things', meta,
         Column('character', TEXT, primary_key=True),
@@ -238,17 +249,11 @@ def tables_for_meta(meta):
         Column('tick', INT, primary_key=True, default=0),
         # when location is null, this node is not a thing, but a place
         Column('location', TEXT),
-        # when next_location is not null, thing is en route between
-        # location and next_location
-        Column('next_location', TEXT, default='null'),
         ForeignKeyConstraint(
             ['character', 'thing'], ['nodes.graph', 'nodes.node']
         ),
         ForeignKeyConstraint(
             ['character', 'location'], ['nodes.graph', 'nodes.node']
-        ),
-        ForeignKeyConstraint(
-            ['character', 'next_location'], ['nodes.graph', 'nodes.node']
         )
     )
 
@@ -308,7 +313,7 @@ def tables_for_meta(meta):
         ),
         Column('turn', INT, primary_key=True, default=0),
         Column('tick', INT, primary_key=True, default=0),
-        Column('is_avatar', Boolean),
+        Column('is_avatar', BOOLEAN),
         ForeignKeyConstraint(['character_graph'], ['graphs.graph']),
         ForeignKeyConstraint(
             ['avatar_graph', 'avatar_node'],
@@ -482,6 +487,12 @@ def tables_for_meta(meta):
         )
     )
 
+    Table(
+        'turns_completed', meta,
+        Column('branch', TEXT, primary_key=True),
+        Column('turn', INT)
+    )
+
     return meta.tables
 
 
@@ -561,30 +572,29 @@ def queries(table):
         branches.c.parent == bindparam('branch')
     )
 
+    tc = table['turns_completed']
+    r['turns_completed_update'] = update_where(['turn'], [tc.c.branch])
+
     return r
 
 
 if __name__ == '__main__':
-    e = create_engine('sqlite:///:memory:')
+    from sqlalchemy import MetaData
+    from sqlalchemy.dialects.sqlite.pysqlite import SQLiteDialect_pysqlite
     meta = MetaData()
     r = {}
     table = tables_for_meta(meta)
+    dia = SQLiteDialect_pysqlite()
     for (n, t) in table.items():
         r["create_" + n] = str(
-            CreateTable(t).compile(
-                dialect=e.dialect
-            )
+            CreateTable(t).compile(dialect=dia)
         )
-        t.create(e)
     index = indices_for_table_dict(table)
     for (n, x) in index.items():
         r["index_" + n] = str(
-            CreateIndex(x).compile(
-                dialect=e.dialect
-            )
+            CreateIndex(x).compile(dialect=dia)
         )
-        x.create(e)
     query = queries(table)
     for (n, q) in query.items():
-        r[n] = str(q.compile(dialect=e.dialect))
+        r[n] = str(q.compile(dialect=dia))
     print(dumps(r, sort_keys=True, indent=4))

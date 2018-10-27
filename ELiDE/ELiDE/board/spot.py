@@ -1,5 +1,18 @@
-# This file is part of LiSE, a framework for life simulation games.
-# Copyright (c) Zachary Spector,  zacharyspector@gmail.com
+# This file is part of ELiDE, frontend to LiSE, a framework for life simulation games.
+# Copyright (c) Zachary Spector, public@zacharyspector.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Widget to represent :class:`Place`s. :class:`Pawn` moves around on
 top of these.
 
@@ -8,10 +21,8 @@ from kivy.clock import Clock
 
 from kivy.properties import (
     AliasProperty,
-    ListProperty,
     ObjectProperty,
-    NumericProperty,
-    BooleanProperty
+    NumericProperty
 )
 from .pawnspot import PawnSpot
 from ..util import trigger
@@ -28,7 +39,6 @@ class Spot(PawnSpot):
     """
     offset = NumericProperty(3)
     collider = ObjectProperty()
-    collided = BooleanProperty(False)
     place = AliasProperty(
         lambda self: self.proxy,
         lambda self, v: self.setter('proxy')(v),
@@ -36,7 +46,6 @@ class Spot(PawnSpot):
     )
     default_image_paths = ['orb.png']
     default_pos = (0.5, 0.5)
-    _touchpos = ListProperty([])
 
     def __init__(self, **kwargs):
         """Deal with triggers and bindings, and arrange to take care of
@@ -50,9 +59,9 @@ class Spot(PawnSpot):
             kwargs['proxy'] = kwargs['place']
             del kwargs['place']
         super().__init__(**kwargs)
-        self.bind(pos=self._trigger_upd_pawns_here)
 
     def on_board(self, *args):
+        super().on_board(*args)
         self.board.bind(size=self._upd_pos)
 
     def _upd_pos(self, *args):
@@ -80,25 +89,15 @@ class Spot(PawnSpot):
         self.proxy['_y'] = self.y / self.board.height
     _trigger_push_pos = trigger(push_pos)
 
-    def on_touch_move(self, touch):
-        """If I'm being dragged, move to follow the touch."""
-        if not self.hit:
-            return False
-        self._touchpos = touch.pos
-        self.center = self._touchpos
-        return True
-
     def on_touch_up(self, touch):
-        """Unset ``touchpos``"""
-        if not self.hit:
+        if touch.grab_current is not self:
             return False
-        if self._touchpos:
-            self.center = self._touchpos
-            self._touchpos = []
-            self._trigger_push_pos()
-        self.collided = False
-        self.hit = False
+        self.center = touch.pos
+        self._trigger_push_pos()
+        touch.ungrab(self)
+        self._trigger_push_pos()
+        return True
 
     def __repr__(self):
         """Give my name and position."""
-        return "{}@({},{})".format(self.name, self.x, self.y)
+        return "<{}@({},{}) at {}>".format(self.name, self.x, self.y, id(self))

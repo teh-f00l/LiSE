@@ -1,5 +1,18 @@
 # This file is part of ELiDE, frontend to LiSE, a framework for life simulation games.
-# Copyright (c) Zachary Spector,  public@zacharyspector.com
+# Copyright (c) Zachary Spector, public@zacharyspector.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Widget to display the contents of a :class:`kivy.atlas.Atlas` in
 one :class:`kivy.uix.togglebutton.ToggleButton` apiece, arranged in a
 :class:`kivy.uix.stacklayout.StackLayout`. The user selects graphics
@@ -30,7 +43,9 @@ class SwatchButton(ToggleButton):
 
     """
     name = StringProperty()
+    """A name, either from a filename or a key into an atlas"""
     tex = ObjectProperty()
+    """Texture to display here"""
 
     def on_state(self, *args):
         if self.state == 'down':
@@ -67,14 +82,23 @@ Builder.load_string(kv)
 
 
 class Pallet(StackLayout):
+    """Many :class:`SwatchButton`, gathered from an :class:`kivy.atlas.Atlas`."""
     atlas = ObjectProperty()
+    """:class:`kivy.atlas.Atlas` object I'll make :class:`SwatchButton` from."""
     filename = StringProperty()
+    """Path to an atlas; will construct :class:`kivy.atlas.Atlas` when set"""
     swatches = DictProperty({})
+    """:class:`SwatchButton` widgets here, keyed by name of their graphic"""
     swatch_width = NumericProperty(100)
+    """Width of each and every :class:`SwatchButton` here"""
     swatch_height = NumericProperty(75)
+    """Height of each and every :class:`SwatchButton` here"""
     swatch_size = ReferenceListProperty(swatch_width, swatch_height)
+    """Size of each and every :class:`SwatchButton` here"""
     selection = ListProperty([])
+    """List of :class:`SwatchButton`s that are selected"""
     selection_mode = OptionProperty('single', options=['single', 'multiple'])
+    """Whether to allow only a 'single' selected :class:`SwatchButton` (default), or 'multiple'"""
 
     def on_selection(self, *args):
         Logger.debug(
@@ -98,6 +122,7 @@ class Pallet(StackLayout):
         self.atlas.bind(textures=self.upd_textures)
 
     def upd_textures(self, *args):
+        """Create one :class:`SwatchButton` for each texture"""
         if self.canvas is None:
             Clock.schedule_once(self.upd_textures, 0)
             return

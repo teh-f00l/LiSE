@@ -1,8 +1,22 @@
 # This file is part of LiSE, a framework for life simulation games.
-# Copyright (c) Zachary Spector,  public@zacharyspector.com
+# Copyright (c) Zachary Spector, public@zacharyspector.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Common utility functions and data structures.
 
 """
+from collections.abc import Set
 from operator import attrgetter, add, sub, mul, pow, truediv, floordiv, mod
 from functools import partial
 from textwrap import dedent
@@ -22,60 +36,6 @@ def singleton_get(s):
             return None
         it = that
     return it
-
-
-def path_len(graph, path, weight=None):
-    """Return the number of ticks it will take to follow ``path``,
-    assuming the portals' ``weight`` attribute is how long it will
-    take to go through that portal--if unspecified, 1 tick.
-
-    """
-    n = 0
-    path = list(path)  # local copy
-    prevnode = path.pop(0)
-    while path:
-        nextnode = path.pop(0)
-        edge = graph.edge[prevnode][nextnode]
-        n += edge[weight] if weight and hasattr(edge, weight) else 1
-        prevnode = nextnode
-    return n
-
-
-def dict_delta(old, new):
-    """Return a dictionary containing the items of ``new`` that are either
-    absent from ``old`` or whose values are different; as well as the
-    value ``None`` for those keys that are present in ``old``, but
-    absent from ``new``.
-
-    Useful for describing changes between two versions of a dict.
-
-    """
-    r = {}
-    oldkeys = set(old.keys())
-    newkeys = set(new.keys())
-    r.update((k, new[k]) for k in newkeys.difference(oldkeys))
-    r.update((k, None) for k in oldkeys.difference(newkeys))
-    for k in oldkeys.intersection(newkeys):
-        if old[k] != new[k]:
-            r[k] = new[k]
-    return r
-
-
-def set_delta(old, new):
-    old = set(old)
-    new = set(new)
-    r = {}
-    r.update((item, False) for item in old.difference(new))
-    r.update((item, True) for item in new.difference(old))
-    return r
-
-
-def keycache_iter(keycache, branch, tick, get_iterator):
-    if branch not in keycache:
-        keycache[branch] = {}
-    if tick not in keycache[branch]:
-        keycache[branch][tick] = set(get_iterator())
-    yield from keycache[branch][tick]
 
 
 class EntityStatAccessor(object):
@@ -194,3 +154,34 @@ def dedent_source(source):
         source = source[nlidx+1:]
         nlidx = source.index('\n')
     return dedent(source)
+
+
+def _sort_set_key(v):
+    if isinstance(v, tuple):
+        return (2,) + tuple(map(repr, v))
+    if isinstance(v, str):
+        return 1, repr(v)
+    return 0, repr(v)
+
+
+_sort_set_memo = {}
+
+
+def sort_set(s):
+    """Return a sorted list of the contents of a set
+
+    This is intended to be used to iterate over world state, where you just need keys
+    to be in some deterministic order, but the sort order should be obvious from the key.
+
+    Non-strings come before strings and then tuples. Tuples compare element-wise as normal.
+    But ultimately all comparisons are between values' ``repr``.
+
+    This is memoized.
+
+    """
+    if not isinstance(s, Set):
+        raise TypeError("sets only")
+    s = frozenset(s)
+    if s not in _sort_set_memo:
+        _sort_set_memo[s] = sorted(s, key=_sort_set_key)
+    return _sort_set_memo[s]

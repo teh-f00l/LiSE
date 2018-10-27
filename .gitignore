@@ -21,3 +21,13 @@ ELiDE/allegedb
 LiSE/allegedb
 *.pyc
 *~
+trigger.py
+prereq.py
+action.py
+function.py
+method.py
+strings.json
+ELiDE.ini
+.coverage
+.pytest_cache
+breakage.diff

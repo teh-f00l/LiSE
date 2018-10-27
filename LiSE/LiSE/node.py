@@ -1,5 +1,18 @@
 # This file is part of LiSE, a framework for life simulation games.
-# Copyright (c) Zachary Spector,  public@zacharyspector.com
+# Copyright (c) Zachary Spector, public@zacharyspector.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """A base class for nodes that can be in a character.
 
 Every actual node that you're meant to use will be a place or
@@ -24,14 +37,10 @@ class RuleMapping(rule.RuleMapping):
     with a node.
 
     """
-    __slots__ = ['node']
-
     def __init__(self, node):
         """Initialize with node's engine, character, and rulebook."""
         super().__init__(node.engine, node.rulebook)
         self.node = node
-
-    character = getatt('node.character')
 
 
 class UserMapping(Mapping):
@@ -98,38 +107,24 @@ class UserMapping(Mapping):
         return False
 
     def __getitem__(self, k):
-        if len(self) == 1:
-            me = self.engine.character[next(self._user_names())]
-            if k in me:
-                return me[k]
         if k not in self:
             raise KeyError("{} not used by {}".format(
                 self.node.name, k
             ))
         return self.engine.character[k]
 
-    def __setitem__(self, k, v):
-        if len(self) != 1:
-            raise KeyError(
-                "More than one user. "
-                "Look up the one you want to set a stat on."
-            )
-        me = self.engine.character[next(self._user_names())]
-        me[k] = v
-
-    def __getattr__(self, attr):
-        if len(self) == 1:
-            me = self.engine.character[next(self._user_names())]
-            if hasattr(me, attr):
-                return getattr(me, attr)
-
 
 class NodeContentValues(ValuesView):
     def __iter__(self):
         node = self._mapping.node
-        for thing in node.character.thing.values():
-            if thing.location == node:
-                yield thing
+        nodem = node.character.node
+        try:
+            for name in node.engine._node_contents_cache.retrieve(
+                    node.character.name, node.name, *node.engine.btt()
+            ):
+                yield nodem[name]
+        except KeyError:
+            return
 
     def __contains__(self, item):
         return item.location == self._mapping.node
@@ -142,16 +137,20 @@ class NodeContent(Mapping):
         self.node = node
 
     def __iter__(self):
-        # TODO: cache this
-        for name, thing in self.node.character.thing.items():
-            if thing.location == self.node:
-                yield name
+        try:
+            yield from self.node.engine._node_contents_cache.retrieve(
+                self.node.character.name, self.node.name, *self.node.engine.btt()
+            )
+        except KeyError:
+            return
 
     def __len__(self):
-        n = 0
-        for thing in self:
-            n += 1
-        return n
+        try:
+            return len(self.node.engine._node_contents_cache.retrieve(
+                self.node.character.name, self.node.name, *self.node.engine.btt()
+            ))
+        except KeyError:
+            return 0
 
     def __contains__(self, item):
         try:
@@ -239,12 +238,22 @@ class Origs(Mapping):
 
 
 class UserDescriptor:
+    """Give a node's user if there's only one
+
+    If there are many users, but one of them has the same name as this node, give that one.
+
+    Otherwise, raise AmbiguousUserError.
+
+    """
     usermapping = UserMapping
 
     def __get__(self, instance, owner):
         mapping = self.usermapping(instance)
         it = iter(mapping)
-        k = next(it)
+        try:
+            k = next(it)
+        except StopIteration:
+            raise AmbiguousUserError("No users")
         try:
             next(it)
             raise AmbiguousUserError("{} users. Use the ``users`` property".format(len(mapping)))
@@ -265,10 +274,11 @@ class Node(allegedb.graph.Node, rule.RuleFollower):
     contain things.
 
     """
-    __slots__ = ['graph', 'db', 'node']
+    __slots__ = ()
     engine = getatt('db')
     character = getatt('graph')
     name = getatt('node')
+    no_unwrap = True
 
     def _get_rule_mapping(self):
         return RuleMapping(self)
@@ -287,12 +297,18 @@ class Node(allegedb.graph.Node, rule.RuleFollower):
             self._get_rulebook_name()
         )
 
-    def _set_rulebook_name(self, v):
-        self.engine._set_node_rulebook(
-            self.character.name,
-            self.name,
-            v
-        )
+    def _set_rulebook_name(self, rulebook):
+        character = self.character.name
+        node = self.name
+        cache = self.engine._nodes_rulebooks_cache
+        try:
+            if rulebook == cache.retrieve(character, node, *self.engine.btt()):
+                return
+        except KeyError:
+            pass
+        branch, turn, tick = self.engine.nbtt()
+        cache.store(character, node, branch, turn, tick, rulebook)
+        self.engine.query.set_node_rulebook(character, node, branch, turn, tick, rulebook)
 
     @property
     def portal(self):
@@ -482,6 +498,3 @@ class Node(allegedb.graph.Node, rule.RuleFollower):
 
     def __bool__(self):
         return self.name in self.character.node
-
-    def unwrap(self):
-        return {k: v.unwrap() if hasattr(v, 'unwrap') else v for (k, v) in self.items()}

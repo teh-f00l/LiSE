@@ -1,5 +1,18 @@
 # This file is part of LiSE, a framework for life simulation games.
-# Copyright (c) Zachary Spector,  public@zacharyspector.com
+# Copyright (c) Zachary Spector, public@zacharyspector.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 from allegedb.cache import (
     Cache,
     PickyDefaultDict,
@@ -7,7 +20,7 @@ from allegedb.cache import (
     TurnDict,
     HistoryError
 )
-from .util import singleton_get
+from .util import singleton_get, sort_set
 
 
 class InitializedCache(Cache):
@@ -20,6 +33,8 @@ class InitializedCache(Cache):
             prev = self.retrieve(*args[:-1])
         except KeyError:
             return  # because you can't rewind past this
+        if prev == value:
+            return  # not much point reporting on a non-change in a diff
         if turn in settings_turns or turn in settings_turns.future():
             assert turn in presettings_turns or turn in presettings_turns.future()
             setticks = settings_turns[turn]
@@ -32,8 +47,8 @@ class InitializedCache(Cache):
 
 
 class EntitylessCache(Cache):
-    def store(self, key, branch, turn, tick, value, *, planning=None, forward=None):
-        super().store(None, key, branch, turn, tick, value, planning=planning, forward=forward)
+    def store(self, key, branch, turn, tick, value, *, planning=None):
+        super().store(None, key, branch, turn, tick, value, planning=planning)
 
     def load(self, data, validate=False):
         return super().load(((None,) + row for row in data), validate)
@@ -45,8 +60,8 @@ class EntitylessCache(Cache):
         return super().iter_entities_or_keys(None, branch, turn, tick, forward=forward)
     iter_entities = iter_keys = iter_entities_or_keys
 
-    def contains_entity_or_key(self, ke, branch, turn, tick, *, forward=None):
-        return super().contains_entity_or_key(None, ke, branch, turn, tick, forward=forward)
+    def contains_entity_or_key(self, ke, branch, turn, tick):
+        return super().contains_entity_or_key(None, ke, branch, turn, tick)
     contains_entity = contains_key = contains_entity_or_key
 
     def retrieve(self, *args):
@@ -303,7 +318,7 @@ class CharacterRulesHandledCache(RulesHandledCache):
             return character, 'character'
 
     def iter_unhandled_rules(self, branch, turn, tick):
-        for character in self.engine.character:
+        for character in sort_set(self.engine.character.keys()):
             rb = self.get_rulebook(character, branch, turn, tick)
             for rule in self.unhandled_rulebook_rules(
                 character, rb, branch, turn, tick
@@ -319,16 +334,18 @@ class AvatarRulesHandledCache(RulesHandledCache):
             return character, 'avatar'
 
     def iter_unhandled_rules(self, branch, turn, tick):
-        for character, char in self.engine.character.items():
+        charm = self.engine.character
+        for character in sort_set(charm.keys()):
             rulebook = self.get_rulebook(character, branch, turn, tick)
-            for graph, avs in char.avatar.items():
-                for avatar in avs:
+            charavm = charm[character].avatar
+            for graph in sort_set(charavm.keys()):
+                for avatar in sort_set(charavm[graph].keys()):
                     try:
-                        rules = self.unhandled_rulebook_rules((graph, avatar), rulebook, branch, turn, tick)
+                        rules = self.unhandled_rulebook_rules(character, graph, avatar, rulebook, branch, turn, tick)
                     except KeyError:
                         continue
                     for rule in rules:
-                        yield character, rulebook, graph, avatar, rule
+                        yield character, graph, avatar, rulebook, rule
 
 
 class CharacterThingRulesHandledCache(RulesHandledCache):
@@ -339,11 +356,14 @@ class CharacterThingRulesHandledCache(RulesHandledCache):
             return character, 'character_thing'
 
     def iter_unhandled_rules(self, branch, turn, tick):
-        for character, char in self.engine.character.items():
+        charm = self.engine.character
+        for character in sort_set(charm.keys()):
             rulebook = self.get_rulebook(character, branch, turn, tick)
-            for thing in char.thing:
+            things = sort_set(charm[character].thing.keys())
+            pass
+            for thing in things:
                 try:
-                    rules = self.unhandled_rulebook_rules((character, thing), rulebook, branch, turn, tick)
+                    rules = self.unhandled_rulebook_rules(character, thing, rulebook, branch, turn, tick)
                 except KeyError:
                     continue
                 for rule in rules:
@@ -358,11 +378,12 @@ class CharacterPlaceRulesHandledCache(RulesHandledCache):
             return character, 'character_place'
 
     def iter_unhandled_rules(self, branch, turn, tick):
-        for character, char in self.engine.character.items():
+        charm = self.engine.character
+        for character in sort_set(charm.keys()):
             rulebook = self.get_rulebook(character, branch, turn, tick)
-            for place in char.place:
+            for place in sort_set(charm[character].place.keys()):
                 try:
-                    rules = self.unhandled_rulebook_rules((character, place), rulebook, branch, turn, tick)
+                    rules = self.unhandled_rulebook_rules(character, place, rulebook, branch, turn, tick)
                 except KeyError:
                     continue
                 for rule in rules:
@@ -377,15 +398,17 @@ class CharacterPortalRulesHandledCache(RulesHandledCache):
             return character, 'character_portal'
 
     def iter_unhandled_rules(self, branch, turn, tick):
-        for character, char in self.engine.character.items():
+        charm = self.engine.character
+        for character in sort_set(charm.keys()):
             try:
                 rulebook = self.get_rulebook(character, branch, turn, tick)
             except KeyError:
                 continue
-            for orig in char.portal:
-                for dest in char.portal[orig]:
+            charp = charm[character].portal
+            for orig in sort_set(charp.keys()):
+                for dest in sort_set(charp[orig].keys()):
                     try:
-                        rules = self.unhandled_rulebook_rules((character, orig, dest), rulebook, branch, turn, tick)
+                        rules = self.unhandled_rulebook_rules(character, orig, dest, rulebook, branch, turn, tick)
                     except KeyError:
                         continue
                     for rule in rules:
@@ -400,11 +423,12 @@ class NodeRulesHandledCache(RulesHandledCache):
             return character, node
 
     def iter_unhandled_rules(self, branch, turn, tick):
-        for character, char in self.engine.character.items():
-            for node in char.node:
+        charm = self.engine.character
+        for character in sort_set(charm.keys()):
+            for node in sort_set(charm[character].node.keys()):
                 try:
                     rulebook = self.get_rulebook(character, node, branch, turn, tick)
-                    rules = self.unhandled_rulebook_rules((character, node), rulebook, branch, turn, tick)
+                    rules = self.unhandled_rulebook_rules(character, node, rulebook, branch, turn, tick)
                 except KeyError:
                     continue
                 for rule in rules:
@@ -419,12 +443,15 @@ class PortalRulesHandledCache(RulesHandledCache):
             return character, orig, dest
 
     def iter_unhandled_rules(self, branch, turn, tick):
-        for character, char in self.engine.character.items():
-            for orig, dests in char.portal.items():
-                for dest in dests:
+        charm = self.engine.character
+        for character in sort_set(charm.keys()):
+            charp = charm[character].portal
+            for orig in sort_set(charp.keys()):
+                dests = charp[orig]
+                for dest in sort_set(dests.keys()):
                     try:
                         rulebook = self.get_rulebook(character, orig, dest, branch, turn, tick)
-                        rules = self.unhandled_rulebook_rules((character, orig, dest), rulebook, branch, turn, tick)
+                        rules = self.unhandled_rulebook_rules(character, orig, dest, rulebook, branch, turn, tick)
                     except KeyError:
                         continue
                     for rule in rules:
@@ -435,6 +462,31 @@ class ThingsCache(Cache):
     def __init__(self, db):
         Cache.__init__(self, db)
         self._make_node = db.thing_cls
+
+    def _store(self, *args, planning):
+        character, thing, branch, turn, tick, location = args
+        try:
+            oldloc = self.retrieve(character, thing, branch, turn, tick)
+        except KeyError:
+            oldloc = None
+        super()._store(*args, planning=planning)
+        if oldloc is not None:
+            oldnodecont = self.db._node_contents_cache.retrieve(
+                character, oldloc, branch, turn, tick
+            )
+            self.db._node_contents_cache.store(
+                character, thing, branch, turn, tick, oldnodecont.difference((thing,))
+            )
+        try:
+            newnodecont = self.db._node_contents_cache.retrieve(
+                character, location, branch, turn, tick
+            )
+        except KeyError:
+            newnodecont = frozenset()
+        self.db._node_contents_cache.store(
+            character, location, branch, turn, tick,
+            newnodecont.union((thing,))
+        )
 
     def turn_before(self, character, thing, branch, turn):
         try:

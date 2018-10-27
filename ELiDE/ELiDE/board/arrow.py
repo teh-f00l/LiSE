@@ -1,5 +1,18 @@
-# This file is part of LiSE, a framework for life simulation games.
-# Copyright (c) Zachary Spector,  zacharyspector@gmail.com
+# This file is part of ELiDE, frontend to LiSE, a framework for life simulation games.
+# Copyright (c) Zachary Spector, public@zacharyspector.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """That which displays a one-way connection between two places.
 
 An arrow connects two spots, the origin and the destination, and it
@@ -7,8 +20,11 @@ points from the origin to the destination, regardless of where on the
 screen they are at the moment.
 
 """
-from math import cos, sin, hypot, atan, pi
+from math import cos, sin, atan, pi
 from kivy.uix.widget import Widget
+from kivy.uix.floatlayout import FloatLayout
+from kivy.graphics.fbo import Fbo
+from kivy.graphics import Translate, Rectangle
 from kivy.properties import (
     ReferenceListProperty,
     AliasProperty,
@@ -24,11 +40,75 @@ from kivy.clock import Clock
 try:
     from kivy.garden.collider import Collide2DPoly
 except (KeyError, ImportError):
-    from ..util import Collide2DPoly
+    from ..collide import Collide2DPoly
 from ..util import get_thin_rect_vertices, fortyfive
 
 
-def get_points(ox, oy, ro, dx, dy, rd, taillen):
+def up_and_down(orig, dest, taillen):
+    if orig.center_y == dest.center_y:
+        raise ValueError("Can't draw an arrow at a point")
+    flipped = orig.center_y > dest.center_y
+    if flipped:
+        orig, dest = dest, orig
+    x = int(orig.center_x)
+    dy = int(dest.y)
+    for dy in range(dy, int(dest.center_y)+1):
+        if dest.collide_point(x, dy):
+            break
+    oy = int(orig.top)
+    for oy in range(oy, int(orig.center_y)-1, -1):
+        if orig.collide_point(x, oy):
+            break
+    if flipped:
+        oy, dy = dy, oy
+    off1 = cos(fortyfive) * taillen
+    off2 = sin(fortyfive) * taillen
+    x0 = x
+    y0 = oy
+    endx = x
+    endy = dy
+    x1 = endx - off1
+    x2 = endx + off1
+    y1 = y2 = endy - off2 if oy < dy else endy + off2
+    return (
+        [x0, y0, endx, endy],
+        [x1, y1, endx, endy, x2, y2]
+    )
+
+
+def left_and_right(orig, dest, taillen):
+    if orig.center_x == dest.center_x:
+        raise ValueError("Can't draw an arrow at a point")
+    flipped = orig.center_x > dest.center_x
+    if flipped:
+        orig, dest = dest, orig
+    y = int(orig.center_y)
+    dx = int(dest.x)
+    for dx in range(dx, int(dest.center_x)+1):
+        if dest.collide_point(dx, y):
+            break
+    ox = int(orig.right)
+    for ox in range(ox, int(orig.center_x)-1, -1):
+        if orig.collide_point(ox, y):
+            break
+    if flipped:
+        ox, dx = dx, ox
+    off1 = cos(fortyfive) * taillen
+    off2 = sin(fortyfive) * taillen
+    x0 = ox
+    y0 = y
+    endx = dx
+    endy = y
+    y1 = endy - off1
+    y2 = endy + off1
+    x1 = x2 = endx - off2 if ox < dx else endx + off2
+    return (
+        [x0, y0, endx, endy],
+        [x1, y1, endx, endy, x2, y2]
+    )
+
+
+def get_points(orig, dest, taillen):
     """Return a pair of lists of points for use making an arrow.
 
     The first list is the beginning and end point of the trunk of the arrow.
@@ -36,9 +116,13 @@ def get_points(ox, oy, ro, dx, dy, rd, taillen):
     The second list is the arrowhead.
 
     """
-    # handle special cases;
-    # flip the arrow, if needed, to make it point up and right;
-    # store coefficients to flip it back again
+    # Adjust the start and end points so they're on the first non-transparent pixel.
+    # y = slope(x-ox) + oy
+    # x = (y - oy) / slope + ox
+    ox, oy = orig.center
+    ow, oh = orig.size
+    dx, dy = dest.center
+    dw, dh = dest.size
     if ox < dx:
         leftx = ox
         rightx = dx
@@ -48,19 +132,8 @@ def get_points(ox, oy, ro, dx, dy, rd, taillen):
         rightx = dx * -1
         xco = -1
     else:
-        off1 = cos(fortyfive) * taillen
-        off2 = sin(fortyfive) * taillen
-        x0 = ox
-        y0 = oy + ro if oy < dy else oy - ro
-        endx = dx
-        endy = dy - rd if oy < dy else dy + rd
-        x1 = endx - off1
-        x2 = endx + off1
-        y1 = y2 = endy - off2 if oy < dy else endy + off2
-        return (
-            [x0, y0, endx, endy],
-            [x1, y1, endx, endy, x2, y2]
-        )
+        # straight up and down arrow
+        return up_and_down(orig, dest, taillen)
     if oy < dy:
         boty = oy
         topy = dy
@@ -70,33 +143,81 @@ def get_points(ox, oy, ro, dx, dy, rd, taillen):
         topy = dy * -1
         yco = -1
     else:
-        off1 = cos(fortyfive) * taillen
-        off2 = sin(fortyfive) * taillen
-        x0 = ox + ro if ox < dx else ox - ro
-        y0 = oy
-        endx = dx - rd if ox < dx else dx + rd
-        endy = dy
-        y1 = endy - off1
-        y2 = endy + off1
-        x1 = x2 = endx - off2 if ox < dx else endx + off2
-        return (
-            [x0, y0, endx, endy],
-            [x1, y1, endx, endy, x2, y2]
-        )
+        # straight left and right arrow
+        return left_and_right(orig, dest, taillen)
+    slope = (topy - boty) / (rightx - leftx)
+    # start from the earliest point that intersects the bounding box.
+    # work toward the center to find a non-transparent pixel
+    # y - boty = ((topy-boty)/(rightx-leftx))*(x - leftx)
+    if slope <= 1:
+        for rightx in range(
+                int(rightx - dw / 2),
+                int(rightx)+1
+        ):
+            topy = slope * (rightx - leftx) + boty
+            if dest.collide_point(rightx * xco, topy * yco):
+                rightx = float(rightx - 1)
+                for pip in range(10):
+                    rightx += 0.1 * pip
+                    topy = slope * (rightx - leftx) + boty
+                    if dest.collide_point(rightx * xco, topy * yco):
+                        break
+                break
+        for leftx in range(
+                int(leftx + ow / 2),
+                int(leftx)-1,
+                -1
+        ):
+            boty = slope * (leftx - rightx) + topy
+            if orig.collide_point(leftx * xco, boty * yco):
+                leftx = float(leftx + 1)
+                for pip in range(10):
+                    leftx -= 0.1 * pip
+                    boty = slope * (leftx - rightx) + topy
+                    if orig.collide_point(leftx * xco, boty * yco):
+                        break
+                break
+    else:
+        # x = leftx + ((rightx-leftx)(y - boty))/(topy-boty)
+        for topy in range(
+            int(topy - dh / 2),
+            int(topy) + 1
+        ):
+            rightx = leftx + (topy - boty) / slope
+            if dest.collide_point(rightx * xco, topy * yco):
+                topy = float(topy - 1)
+                for pip in range(10):
+                    topy += 0.1 * pip
+                    rightx = leftx + (topy - boty) / slope
+                    if dest.collide_point(rightx * xco, topy * yco):
+                        break
+                break
+        for boty in range(
+            int(boty + oh / 2),
+            int(boty) - 1,
+            -1
+        ):
+            leftx = (boty - topy) / slope + rightx
+            if orig.collide_point(leftx * xco, boty * yco):
+                boty = float(boty + 1)
+                for pip in range(10):
+                    boty -= 0.1 * pip
+                    leftx = (boty - topy) / slope + rightx
+                    if orig.collide_point(leftx * xco, boty * yco):
+                        break
+                break
 
     rise = topy - boty
     run = rightx - leftx
 
-    # truncate the end so it just touches the destination circle.
-    start_theta = atan(rise/run)
-    end_theta = atan(run/rise)
-    length = hypot(run, rise) - rd
-    rightx = leftx + cos(start_theta) * length
-    topy = boty + sin(start_theta) * length
-    # truncate the start so it's at the very edge of the origin circle.
-    length -= ro
-    leftx = rightx - sin(end_theta) * length
-    boty = topy - cos(end_theta) * length
+    try:
+        start_theta = atan(rise/run)
+    except ZeroDivisionError:
+        return up_and_down(orig, dest, taillen)
+    try:
+        end_theta = atan(run/rise)
+    except ZeroDivisionError:
+        return left_and_right(orig, dest, taillen)
 
     # make the little wedge at the end so you can tell which way the
     # arrow's pointing, and flip it all back around to the way it was
@@ -120,6 +241,9 @@ def get_points(ox, oy, ro, dx, dy, rd, taillen):
     )
 
 
+eight0s = tuple([0] * 8)
+
+
 class ArrowWidget(Widget):
     """A widget that points from one :class:`~LiSE.gui.board.Spot` to
     another.
@@ -138,16 +262,16 @@ class ArrowWidget(Widget):
     w = NumericProperty(2)
     """The width of the inner, brighter portion of the :class:`Arrow`. The
     whole :class:`Arrow` will end up thicker."""
-    pawns_here = ListProperty([])
-    trunk_points = ListProperty([])
-    head_points = ListProperty([])
+    pawns_here = ListProperty()
+    trunk_points = ListProperty()
+    head_points = ListProperty()
     points = ReferenceListProperty(trunk_points, head_points)
-    trunk_quad_vertices_bg = ListProperty([0] * 8)
-    trunk_quad_vertices_fg = ListProperty([0] * 8)
-    left_head_quad_vertices_bg = ListProperty([0] * 8)
-    right_head_quad_vertices_bg = ListProperty([0] * 8)
-    left_head_quad_vertices_fg = ListProperty([0] * 8)
-    right_head_quad_vertices_fg = ListProperty([0] * 8)
+    trunk_quad_vertices_bg = ListProperty(eight0s)
+    trunk_quad_vertices_fg = ListProperty(eight0s)
+    left_head_quad_vertices_bg = ListProperty(eight0s)
+    right_head_quad_vertices_bg = ListProperty(eight0s)
+    left_head_quad_vertices_fg = ListProperty(eight0s)
+    right_head_quad_vertices_fg = ListProperty(eight0s)
     slope = NumericProperty(0.0, allownone=True)
     y_intercept = NumericProperty(0)
     origin = ObjectProperty()
@@ -156,11 +280,14 @@ class ArrowWidget(Widget):
     bg_scale_unselected = NumericProperty(4)
     bg_scale_selected = NumericProperty(5)
     selected = BooleanProperty(False)
-    hit = BooleanProperty(False)
     bg_color_unselected = ListProperty()
     bg_color_selected = ListProperty()
     fg_color_unselected = ListProperty()
     fg_color_selected = ListProperty()
+    bg_color_unselected_head = ListProperty()
+    bg_color_selected_head = ListProperty()
+    fg_color_unselected_head = ListProperty()
+    fg_color_selected_head = ListProperty()
     arrowhead_size = NumericProperty(10)
     collide_radius = NumericProperty(3)
     collider = ObjectProperty()
@@ -254,9 +381,9 @@ class ArrowWidget(Widget):
         )
         mycanvas.remove(wid.canvas)
         pawncanvas = (
-            self.board.pawnlayout.canvas.before if canvas == 'before' else
-            self.board.pawnlayout.canvas.after if canvas == 'after' else
-            self.board.pawnlayout.canvas
+            self.board.spotlayout.canvas.before if canvas == 'before' else
+            self.board.spotlayout.canvas.after if canvas == 'after' else
+            self.board.spotlayout.canvas
         )
         for child in self.children:
             if hasattr(child, 'group') and child.group in pawncanvas.children:
@@ -325,18 +452,7 @@ class ArrowWidget(Widget):
 
     def _get_points(self):
         """Return the coordinates of the points that describe my shape."""
-        orig = self.origin
-        dest = self.destination
-        (ox, oy) = orig.center
-        ow = orig.width if hasattr(orig, 'width') else 0
-        taillen = float(self.arrowhead_size)
-        ory = ow / 2
-        (dx, dy) = dest.center
-        (dw, dh) = dest.size if hasattr(dest, 'size') else (0, 0)
-        dry = dh / 2
-        return get_points(
-            ox, oy, ory, dx, dy, dry, taillen
-        )
+        return get_points(self.origin, self.destination, self.arrowhead_size)
 
     def _get_slope(self):
         """Return a float of the increase in y divided by the increase in x,
@@ -377,7 +493,11 @@ class ArrowWidget(Widget):
         if None in (self.origin, self.destination):
             Clock.schedule_once(self._repoint, 0)
             return
-        (self.trunk_points, self.head_points) = self._get_points()
+        try:
+            (self.trunk_points, self.head_points) = self._get_points()
+        except ValueError:
+            self.trunk_points = self.head_points = []
+            return
         (ox, oy, dx, dy) = self.trunk_points
         r = self.w / 2
         bgr = r * self.bg_scale_selected if self.selected \
@@ -413,6 +533,8 @@ class Arrow(ArrowWidget):
     creating a new :class:`Portal`.
 
     """
+    origspot = ObjectProperty()
+    destspot = ObjectProperty()
     portal = ObjectProperty()
     """The portal that I represent."""
     reciprocal = AliasProperty(
@@ -440,6 +562,66 @@ class Arrow(ArrowWidget):
             return None
 
 
+class ArrowLayout(FloatLayout):
+    def __init__(self, **kwargs):
+        self._trigger_redraw = Clock.create_trigger(self.redraw)
+        self.bind(children=self._trigger_redraw)
+        super().__init__(**kwargs)
+
+    def on_parent(self, *args):
+        if not self.canvas:
+            Clock.schedule_once(self.on_parent, 0)
+            return
+        with self.canvas:
+            self._fbo = Fbo(size=self.size)
+            self._translate = Translate(x=self.x, y=self.y)
+            self._rectangle = Rectangle(size=self.size, texture=self._fbo.texture)
+
+    def redraw(self, *args):
+        if not hasattr(self, '_rectangle'):
+            self._trigger_redraw()
+            return
+        fbo = self._fbo
+        fbo.bind()
+        fbo.clear()
+        fbo.clear_buffer()
+        fbo.release()
+        trigger_redraw = self._trigger_redraw
+        for child in self.children:
+            fbo.add(child.canvas)
+            child.bind(selected=trigger_redraw)
+            child.origspot.bind(pos=trigger_redraw)
+            child.destspot.bind(pos=trigger_redraw)
+
+    def on_pos(self, *args):
+        if not hasattr(self, '_translate'):
+            return
+        self._translate.x, self._translate.y = self.pos
+
+    def on_size(self, *args):
+        if not hasattr(self, '_rectangle') or not hasattr(self, '_fbo'):
+            return
+        self._rectangle.size = self._fbo.size = self.size
+        self.redraw()
+
+    def add_widget(self, widget, index=0, canvas=None):
+        if index == 0 or len(self.children) == 0:
+            self.children.insert(0, widget)
+        else:
+            children = self.children
+            if index >= len(children):
+                index = len(children)
+
+            children.insert(index, widget)
+        widget.parent = self
+
+    def remove_widget(self, widget):
+        if widget not in self.children:
+            return
+        self.children.remove(widget)
+        widget.parent = None
+
+
 Builder.load_string(
 """
 #: import Dummy ELiDE.dummy.Dummy
@@ -453,6 +635,8 @@ Builder.load_string(
             rgba: root.bg_color_selected if root.selected else root.bg_color_unselected
         Quad:
             points: root.trunk_quad_vertices_bg
+        Color:
+            rgba: (root.bg_color_selected_head or root.bg_color_selected) if root.selected else (root.bg_color_unselected_head or root.bg_color_unselected) 
         Quad:
             points: root.left_head_quad_vertices_bg
         Quad:
@@ -461,6 +645,8 @@ Builder.load_string(
             rgba: root.fg_color_selected if root.selected else root.fg_color_unselected
         Quad:
             points: root.trunk_quad_vertices_fg
+        Color:
+            rgba: (root.fg_color_selected_head or root.fg_color_selected) if root.selected else (root.fg_color_unselected_head or root.fg_color_unselected)
         Quad:
             points: root.left_head_quad_vertices_fg
         Quad:

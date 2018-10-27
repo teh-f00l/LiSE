@@ -1,12 +1,23 @@
-# This file is part of LiSE, a framework for life simulation games.
-# Copyright (c) Zachary Spector,  zacharyspector@gmail.com
+# This file is part of ELiDE, frontend to LiSE, a framework for life simulation games.
+# Copyright (c) Zachary Spector, public@zacharyspector.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Widget representing things that move about from place to place."""
 from kivy.properties import (
     AliasProperty,
-    BooleanProperty,
     ObjectProperty,
-    NumericProperty,
-    ReferenceListProperty
+    NumericProperty
 )
 from .pawnspot import PawnSpot
 from ..util import trigger
@@ -28,12 +39,7 @@ class Pawn(PawnSpot):
     through.
 
     """
-    _touch_ox_diff = NumericProperty()
-    _touch_oy_diff = NumericProperty()
-    _touch_opos_diff = ReferenceListProperty(_touch_ox_diff, _touch_oy_diff)
-    _touch = ObjectProperty(None, allownone=True)
     loc_name = ObjectProperty()
-    next_loc_name = ObjectProperty(None, allownone=True)
     thing = AliasProperty(
         lambda self: self.proxy,
         lambda self, v: self.proxy.setter()(v),
@@ -46,29 +52,19 @@ class Pawn(PawnSpot):
         if 'thing' in kwargs:
             kwargs['proxy'] = kwargs['thing']
             del kwargs['thing']
+        if 'proxy' in kwargs:
+            kwargs['loc_name'] = kwargs['proxy']['location']
         super().__init__(**kwargs)
         self.register_event_type('on_drop')
 
     def on_parent(self, *args):
         if self.parent:
-            self._board = self.parent.board
+            self.board = self.parent.board
             self.bind(
-                loc_name=self._trigger_relocate,
-                next_loc_name=self._trigger_relocate
+                loc_name=self._trigger_relocate
             )
             if self.proxy:
                 self._trigger_relocate()
-        else:
-            if not hasattr(self, '_board'):
-                return
-            for canvas in (
-                    self._board.pawnlayout.canvas.before,
-                    self._board.pawnlayout.canvas.after,
-                    self._board.pawnlayout.canvas
-            ):
-                if self.group in canvas.children:
-                    canvas.remove(self.group)
-            del self._board
 
     def relocate(self, *args):
         if not self.proxy.exists:
@@ -83,7 +79,6 @@ class Pawn(PawnSpot):
     def finalize(self, initial=True):
         if initial:
             self.loc_name = self.proxy['location']
-            self.next_loc_name = self.proxy.get('next_location', None)
             self.priority = self.proxy.get('_priority', 0.0)
         self.bind(
             loc_name=self._trigger_push_location
@@ -102,10 +97,7 @@ class Pawn(PawnSpot):
         if self.loc_name != self.proxy['location']:
             self.loc_name = self.proxy['location']  # aliasing? could be trouble
             relocate = True
-        if self.next_loc_name != self.proxy['next_location']:
-            self.next_loc_name = self.proxy['next_location']
-            relocate = True
-        if '_priority' in self.proxy and self.priority != self.proxy['_priority']:
+        if '_priority' in self.proxy:
             self.priority = self.proxy['_priority']
         if relocate:
             self.relocate()
@@ -120,64 +112,34 @@ class Pawn(PawnSpot):
             self.proxy['location'] = self.loc_name
     _trigger_push_location = trigger(push_location)
 
-    def add_widget(self, pawn, index=0, canvas='after'):
-        """Apart from the normal behavior, bind my ``center`` so that the
-        child's lower left corner will always be there, so long as
-        it's my child.
-
-        """
-        super().add_widget(pawn, index, canvas)
-        pawn.pos = self.center
-        self.bind(center=pawn.setter('pos'))
-
-    def remove_widget(self, pawn):
-        """Unbind my ``center`` from the child before removing it."""
-        if pawn not in self.children:
-            raise ValueError("Not my child")
-        self.unbind(center=pawn.setter('pos'))
-        super().remove_widget(pawn)
-
-    def on_touch_move(self, touch):
-        """Move with the touch if I'm grabbed."""
-        if touch.grab_current != self:
-            return False
-        if hasattr(self.parent, 'place') and \
-           not hasattr(self, '_pospawn_unbound'):
-            self.parent.unbind_trigger_pospawn(self)
-            self._pospawn_unbound = True
-        self.center = touch.pos
-        return True
-
     def on_touch_up(self, touch):
-        if touch.grab_current != self:
+        if touch.grab_current is not self:
             return False
-        if hasattr(self.parent, 'place') and hasattr(self, '_pospawn_unbound'):
-            self.parent.bind_trigger_pospawn(self)
-            del self._pospawn_unbound
         for spot in self.board.spot.values():
             if self.collide_widget(spot) and spot.name != self.loc_name:
                 new_spot = spot
                 break
         else:
-            self.dispatch('on_drop', None)
-            return True
+            new_spot = None
 
         self.dispatch('on_drop', new_spot)
+        touch.ungrab(self)
         return True
 
     def on_drop(self, spot):
         parent = self.parent
         if spot:
-            self.loc_name = spot.name
+            self.loc_name = self.proxy['location'] = spot.name
             parent.remove_widget(self)
             spot.add_widget(self)
         else:
-            parent.remove_widget(self)
-            parent.add_widget(self)
+            x, y = parent.positions[self.uid]
+            self.pos = parent.x + x, parent.y + y
 
     def __repr__(self):
         """Give my ``thing``'s name and its location's name."""
-        return '{}-in-{}'.format(
+        return '<{}-in-{} at {}>'.format(
             self.name,
-            self.loc_name
+            self.loc_name,
+            id(self)
         )

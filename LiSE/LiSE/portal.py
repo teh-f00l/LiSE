@@ -1,11 +1,24 @@
 # This file is part of LiSE, a framework for life simulation games.
-# Copyright (c) Zachary Spector,  public@zacharyspector.com
+# Copyright (c) Zachary Spector, public@zacharyspector.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Directed edges, as used by LiSE."""
+from collections import Mapping, ValuesView
 
 from allegedb.graph import Edge
 from allegedb.cache import HistoryError
 
-from .exc import CacheError
 from .util import getatt
 from .query import StatusAlias
 from .rule import RuleFollower
@@ -14,16 +27,11 @@ from .rule import RuleMapping as BaseRuleMapping
 
 class RuleMapping(BaseRuleMapping):
     """Mapping to get rules followed by a portal."""
-    __slots__ = 'portal',
 
     def __init__(self, portal):
         """Store portal, engine, and rulebook."""
         super().__init__(portal.engine, portal.rulebook)
         self.portal = portal
-
-    character = getatt('portal.character')
-    orign = getatt('portal._orign')
-    destn = getatt('portal._destn')
 
 
 class Portal(Edge, RuleFollower):
@@ -37,8 +45,10 @@ class Portal(Edge, RuleFollower):
     set it here instead.
 
     """
+    __slots__ = ('graph', 'orig', 'dest', 'idx')
     character = getatt('graph')
     engine = getatt('db')
+    no_unwrap = True
 
     @property
     def _cache(self):
@@ -68,21 +78,26 @@ class Portal(Edge, RuleFollower):
         ))
 
     def _get_rulebook_name(self):
+        try:
+            return self.engine._portals_rulebooks_cache.retrieve(
+                self.character.name, self.orig, self.dest, *self.engine.btt()
+            )
+        except KeyError:
+            return (self.character.name, self.orig, self.dest)
+
+    def _set_rulebook_name(self, rulebook):
+        character = self.character
+        orig = self.orig
+        dest = self.dest
         cache = self.engine._portals_rulebooks_cache
-        if self.character.name not in cache or \
-            self.orig not in cache[self.character.name] or \
-            self.dest not in cache[
-                self.character.name][self.orig]:
-            return
-        cache = cache[self.character.name][self.orig][self.dest]
-        for (branch, turn, tick) in self.engine._iter_parent_btt():
-            if branch in cache:
-                try:
-                    return cache[branch][turn][tick]
-                except HistoryError as ex:
-                    if ex.deleted:
-                        break
-        return self.character.name, self.orig, self.dest
+        try:
+            if rulebook == cache.retrieve(character, orig, dest, *self.engine.btt()):
+                return
+        except KeyError:
+            pass
+        branch, turn, tick = self.engine.nbtt()
+        cache.store(character, orig, dest, branch, turn, tick, rulebook)
+        self.engine.query.set_portal_rulebook(character, orig, dest, branch, turn, tick, rulebook)
 
     def _get_rule_mapping(self):
         return RuleMapping(self)
@@ -161,10 +176,11 @@ class Portal(Edge, RuleFollower):
 
     def __repr__(self):
         """Describe character, origin, and destination"""
-        return "{}.portal[{}][{}]".format(
-            self['character'],
-            self['origin'],
-            self['destination']
+        return "{}.character[{}].portal[{}][{}]".format(
+            repr(self.engine),
+            repr(self['character']),
+            repr(self['origin']),
+            repr(self['destination'])
         )
 
     def __bool__(self):
@@ -200,22 +216,6 @@ class Portal(Edge, RuleFollower):
             stat=stat
         )
 
-    def contents(self):
-        """Iterate over Thing instances that are presently travelling through
-        me.
-
-        """
-        for thing in self.character.thing.values():
-            if thing['locations'] == (self.orig, self.dest):
-                yield thing
-
-    def new_thing(self, name, statdict={}, **kwargs):
-        """Create and return a thing located in my origin and travelling to my
-        destination."""
-        return self.character.new_thing(
-            name, self.orig, self.dest, statdict, **kwargs
-        )
-
     def update(self, d):
         """Works like regular update, but only actually updates when the new
         value and the old value differ. This is necessary to prevent
@@ -232,7 +232,7 @@ class Portal(Edge, RuleFollower):
         For symmetry with :class:`Thing` and :class`Place`.
 
         """
-        branch, turn, tick = self.engine.btt()
+        branch, turn, tick = self.engine.nbtt()
         self.engine._edges_cache.store(
             self.character.name,
             self.origin.name,
@@ -261,4 +261,7 @@ class Portal(Edge, RuleFollower):
         )
 
     def unwrap(self):
-        return {k: v.unwrap() if hasattr(v, 'unwrap') else v for (k, v) in self.items()}
+        return {
+            k: v.unwrap() if hasattr(v, 'unwrap') and not hasattr(v, 'no_unwrap')
+            else v for (k, v) in self.items()
+        }

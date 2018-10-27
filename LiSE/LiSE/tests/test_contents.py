@@ -1,4 +1,4 @@
-# This file is part of ELiDE, frontend to LiSE, a framework for life simulation games.
+# This file is part of LiSE, a framework for life simulation games.
 # Copyright (c) Zachary Spector, public@zacharyspector.com
 #
 # This program is free software: you can redistribute it and/or modify
@@ -13,25 +13,21 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-from kivy.lang import Builder
-from kivy.uix.modalview import ModalView
-from kivy.properties import ListProperty
+import pytest
 
 
-class KeywordListModal(ModalView):
-    data = ListProperty([])
+@pytest.fixture(scope='function')
+def chara(engy):
+    yield engy.new_character('chara')
 
 
-Builder.load_string("""
-<KeywordListModal>:
-    size_hint_x: 0.6
-    BoxLayout:
-        orientation: 'vertical'
-        StatListView:
-            data: root.data
-        BoxLayout:
-            Button:
-                text: 'Cancel'
-            Button:
-                text: 'Done'
-""")
+def test_many_things_in_place(chara):
+    place = chara.new_place(0)
+    things = [place.new_thing(i) for i in range(1, 10)]
+    for thing in things:
+        assert thing in place.contents()
+    for that in place.content:
+        assert place.content[that].location == place
+    things.sort(key=lambda th: th.name)
+    contents = sorted(place.contents(), key=lambda th: th.name)
+    assert things == contents

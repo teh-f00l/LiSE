@@ -5,45 +5,37 @@ stores for game data and entities, as well as properties for manipulating the
 flow of time.
 
 """
-from random import Random
-from operator import gt, lt, ge, le, eq, ne
 from functools import partial
+from collections import defaultdict
+from operator import attrgetter
 from types import FunctionType, MethodType
-from contextlib import contextmanager
 
 import umsgpack
 from blinker import Signal
 from allegedb import ORM as gORM
-from allegedb.window import update_window, update_backward_window
-from .xcollections import (
-    StringStore,
-    FunctionStore,
-    CharacterMapping,
-    UniversalMapping
-)
-from .character import Character
-from .thing import Thing
-from .place import Place
-from .portal import Portal
-from .rule import AllRuleBooks, AllRules, Rule
-from .query import Query, QueryEngine
-from .util import getatt, reify, EntityStatAccessor
-from .cache import (
-    Cache,
-    InitializedCache,
-    EntitylessCache,
-    InitializedEntitylessCache,
-    AvatarnessCache,
-    AvatarRulesHandledCache,
-    CharacterThingRulesHandledCache,
-    CharacterPlaceRulesHandledCache,
-    CharacterPortalRulesHandledCache,
-    NodeRulesHandledCache,
-    PortalRulesHandledCache,
-    CharacterRulesHandledCache,
-    ThingsCache
-)
+from .util import reify, sort_set
+
 from . import exc
+
+
+class NoPlanningAttrGetter:
+    __slots__ = ('_real',)
+
+    def __init__(self, attr, *attrs):
+        self._real = attrgetter(attr, *attrs)
+
+    def __call__(self, obj):
+        if obj._planning:
+            raise exc.PlanError("Don't use randomization in a plan")
+        return self._real(obj)
+
+
+def getnoplan(attribute_name):
+    return property(NoPlanningAttrGetter(attribute_name))
+
+
+class InnerStopIteration(StopIteration):
+    pass
 
 
 class NextTurn(Signal):
@@ -63,13 +55,40 @@ class NextTurn(Signal):
     def __call__(self):
         engine = self.engine
         start_branch, start_turn, start_tick = engine.btt()
+        latest_turn = engine._turns_completed[start_branch]
+        if start_turn < latest_turn:
+            engine.turn += 1
+            self.send(
+                engine,
+                branch=engine.branch,
+                turn=engine.turn,
+                tick=engine.tick
+            )
+            return [], engine.get_delta(
+                branch=start_branch,
+                turn_from=start_turn,
+                turn_to=engine.turn,
+                tick_from=start_tick,
+                tick_to=engine.tick
+            )
+        elif start_turn > latest_turn + 1:
+            raise exc.RulesEngineError("Can't run the rules engine on any turn but the latest")
+        if start_turn == latest_turn:
+            # As a side effect, the following assignment sets the tick to
+            # the latest in the new turn, which will be 0 if that turn has not
+            # yet been simulated.
+            engine.turn += 1
+            if engine.tick == 0:
+                engine.universal['rando_state'] = engine._rando.getstate()
+            else:
+                engine._rando.setstate(engine.universal['rando_state'])
         with engine.advancing():
             for res in iter(engine.advance, final_rule):
                 if res:
-                    branch, turn, tick = engine.btt()
                     engine.universal['last_result'] = res
                     engine.universal['last_result_idx'] = 0
-                    engine.universal['rando_state'] = engine.rando.getstate()
+                    engine.universal['rando_state'] = engine._rando.getstate()
+                    branch, turn, tick = engine.btt()
                     self.send(
                         engine,
                         branch=branch,
@@ -79,31 +98,22 @@ class NextTurn(Signal):
                     return res, engine.get_delta(
                         branch=start_branch,
                         turn_from=start_turn,
-                        turn_to=engine.turn,
+                        turn_to=turn,
                         tick_from=start_tick,
-                        tick_to=engine.tick
+                        tick_to=tick
                     )
-
-        branch, turn = engine.time
-        turn += 1
-        # As a side effect, the following assignment sets the tick to
-        # the latest in the new turn, which will be 0 if that turn has not
-        # yet been simulated.
-        engine.time = branch, turn
-        if engine.tick == 0:
-            engine.universal['rando_state'] = engine.rando.getstate()
-        else:
-            engine.rando.setstate(engine.universal['rando_state'])
+        engine._turns_completed[start_branch] = engine.turn
+        engine.query.complete_turn(start_branch, engine.turn)
         self.send(
             self.engine,
-            branch=branch,
-            turn=turn,
+            branch=engine.branch,
+            turn=engine.turn,
             tick=engine.tick
         )
         return [], engine.get_delta(
-            branch=branch,
+            branch=engine.branch,
             turn_from=start_turn,
-            turn_to=turn,
+            turn_to=engine.turn,
             tick_from=start_tick,
             tick_to=engine.tick
         )
@@ -155,6 +165,8 @@ class AbstractEngine(object):
     in which deserialized entities will be created as needed.
 
     """
+    from contextlib import contextmanager
+
     @contextmanager
     def loading(self):
         """Context manager for when you need to instantiate entities upon unpacking"""
@@ -327,6 +339,7 @@ class AbstractEngine(object):
             'NonUniqueError': exc.NonUniqueError,
             'AmbiguousAvatarError': exc.AmbiguousAvatarError,
             'AmbiguousUserError': exc.AmbiguousUserError,
+            'RulesEngineError': exc.RulesEngineError,
             'RuleError': exc.RuleError,
             'RedundantRuleError': exc.RedundantRuleError,
             'UserFunctionError': exc.UserFunctionError,
@@ -399,7 +412,7 @@ class AbstractEngine(object):
         for i in range(0, n):
             yield self.roll_die(d)
 
-    def dice_check(self, n, d, target, comparator=le):
+    def dice_check(self, n, d, target, comparator='<='):
         """Roll ``n`` dice with ``d`` sides, sum them, and return whether they
         are <= ``target``.
 
@@ -407,6 +420,8 @@ class AbstractEngine(object):
         use a string like '<' or '>='.
 
         """
+        from operator import gt, lt, ge, le, eq, ne
+
         comps = {
             '>': gt,
             '<': lt,
@@ -437,24 +452,24 @@ class AbstractEngine(object):
             return True
         return pct / 100 < self.random()
 
-    betavariate = getatt('rando.betavariate')
-    choice = getatt('rando.choice')
-    expovariate = getatt('rando.expovariate')
-    gammavariate = getatt('rando.gammavariate')
-    gauss = getatt('rando.gauss')
-    getrandbits = getatt('rando.getrandbits')
-    lognormvariate = getatt('rando.lognormvariate')
-    normalvariate = getatt('rando.normalvariate')
-    paretovariate = getatt('rando.paretovariate')
-    randint = getatt('rando.randint')
-    random = getatt('rando.random')
-    randrange = getatt('rando.randrange')
-    sample = getatt('rando.sample')
-    shuffle = getatt('rando.shuffle')
-    triangular = getatt('rando.triangular')
-    uniform = getatt('rando.uniform')
-    vonmisesvariate = getatt('rando.vonmisesvariate')
-    weibullvariate = getatt('rando.weibullvariate')
+    betavariate = getnoplan('_rando.betavariate')
+    choice = getnoplan('_rando.choice')
+    expovariate = getnoplan('_rando.expovariate')
+    gammavariate = getnoplan('_rando.gammavariate')
+    gauss = getnoplan('_rando.gauss')
+    getrandbits = getnoplan('_rando.getrandbits')
+    lognormvariate = getnoplan('_rando.lognormvariate')
+    normalvariate = getnoplan('_rando.normalvariate')
+    paretovariate = getnoplan('_rando.paretovariate')
+    randint = getnoplan('_rando.randint')
+    random = getnoplan('_rando.random')
+    randrange = getnoplan('_rando.randrange')
+    sample = getnoplan('_rando.sample')
+    shuffle = getnoplan('_rando.shuffle')
+    triangular = getnoplan('_rando.triangular')
+    uniform = getnoplan('_rando.uniform')
+    vonmisesvariate = getnoplan('_rando.vonmisesvariate')
+    weibullvariate = getnoplan('_rando.weibullvariate')
 
 
 class Engine(AbstractEngine, gORM):
@@ -495,8 +510,7 @@ class Engine(AbstractEngine, gORM):
       ``True`` for it to run.
     - ``action``: A mapping of functions that might manipulate the world
       state as a result of a rule running.
-    - ``function``: A mapping of generic functions stored in the same
-      database as the previous.
+    - ``function``: A mapping of generic functions.
     - ``string``: A mapping of strings, probably shown to the player
       at some point.
     - ``eternal``: Mapping of arbitrary serializable objects. It isn't
@@ -505,22 +519,29 @@ class Engine(AbstractEngine, gORM):
       objects, but this one *is* sensitive to sim-time. Each turn, the
       state of the randomizer is saved here under the key
       ``'rando_state'``.
-    - ``rando``: The randomizer used by all of the rules.
 
     """
+    from .character import Character
+    from .thing import Thing
+    from .place import Place
+    from .portal import Portal
+    from .query import QueryEngine
     char_cls = Character
     thing_cls = Thing
     place_cls = node_cls = Place
-    portal_cls = edge_cls = _make_edge = Portal
+    portal_cls = edge_cls = Portal
     query_engine_cls = QueryEngine
     illegal_graph_names = ['global', 'eternal', 'universal', 'rulebooks', 'rules']
     illegal_node_names = ['nodes', 'node_val', 'edges', 'edge_val', 'things']
 
-    def _make_node(self, char, node):
-        if self._is_thing(char.name, node):
-            return self.thing_cls(char, node)
+    def _make_node(self, graph, node):
+        if self._is_thing(graph.name, node):
+            return self.thing_cls(graph, node)
         else:
-            return self.place_cls(char, node)
+            return self.place_cls(graph, node)
+
+    def _make_edge(self, graph, orig, dest, idx=0):
+        return self.portal_cls(graph, orig, dest)
 
     def get_delta(self, branch, turn_from, tick_from, turn_to, tick_to):
         """Get a dictionary describing changes to the world.
@@ -541,7 +562,7 @@ class Engine(AbstractEngine, gORM):
         * 'character_portal_rulebook'
 
         And each node and edge may have a 'rulebook' stat of its own. If a node is a thing,
-        it gets a 'location' and possibly 'next_location'; when the 'location' is deleted,
+        it gets a 'location'; when the 'location' is deleted,
         that means it's back to being a place.
 
         Keys at the top level that are not character names:
@@ -552,6 +573,7 @@ class Engine(AbstractEngine, gORM):
         of the lists 'triggers', 'prereqs', and 'actions'
 
         """
+        from allegedb.window import update_window, update_backward_window
         if turn_from == turn_to:
             return self.get_turn_delta(branch, turn_to, tick_to, start_tick=tick_from)
         delta = super().get_delta(branch, turn_from, tick_from, turn_to, tick_to)
@@ -598,20 +620,15 @@ class Engine(AbstractEngine, gORM):
         if branch in avbranches:
             updater(updav, avbranches[branch])
 
-        def updthing(char, thing, locs):
+        def updthing(char, thing, loc):
             if (
                 char in delta and 'nodes' in delta[char]
                 and thing in delta[char]['nodes'] and not
                 delta[char]['nodes'][thing]
             ):
                 return
-            if locs is None:
-                loc = nxtloc = None
-            else:
-                loc, nxtloc = locs
             thingd = delta.setdefault(char, {}).setdefault('node_val', {}).setdefault(thing, {})
             thingd['location'] = loc
-            thingd['next_location'] = nxtloc
         if branch in thbranches:
             updater(updthing, thbranches[branch])
         # TODO handle arrival_time and next_arrival_time stats of things
@@ -695,10 +712,9 @@ class Engine(AbstractEngine, gORM):
             for chara, graph, node, is_av in self._avatarness_cache.settings[branch][turn][start_tick:tick]:
                 delta.setdefault(chara, {}).setdefault('avatars', {}).setdefault(graph, {})[node] = is_av
         if branch in self._things_cache.settings and turn in self._things_cache.settings[branch]:
-            for chara, thing, (location, next_location) in self._things_cache.settings[branch][turn][start_tick:tick]:
+            for chara, thing, location in self._things_cache.settings[branch][turn][start_tick:tick]:
                 thingd = delta.setdefault(chara, {}).setdefault('node_val', {}).setdefault(thing, {})
                 thingd['location'] = location
-                thingd['next_location'] = next_location
         delta['rulebooks'] = rbdif = {}
         if branch in self._rulebooks_cache.settings and turn in self._rulebooks_cache.settings[branch]:
             for _, rulebook, rules in self._rulebooks_cache.settings[branch][turn][start_tick:tick]:
@@ -774,26 +790,6 @@ class Engine(AbstractEngine, gORM):
         self.rule.query.rulebook_del_all(rulebook)
         del self._rulebooks_cache._data[rulebook]
 
-    def _set_node_rulebook(self, character, node, rulebook):
-        try:
-            if rulebook == self._nodes_rulebooks_cache.retrieve(character, node, *self.engine.btt()):
-                return
-        except KeyError:
-            pass
-        branch, turn, tick = self.engine.nbtt()
-        self._nodes_rulebooks_cache.store(character, node, branch, turn, tick, rulebook)
-        self.engine.query.set_node_rulebook(character, node, branch, turn, tick, rulebook)
-
-    def _set_portal_rulebook(self, character, orig, dest, rulebook):
-        try:
-            if rulebook == self._portals_rulebooks_cache.retrieve(character, orig, dest, *self.engine.btt()):
-                return
-        except KeyError:
-            pass
-        branch, turn, tick = self.engine.nbtt()
-        self._portals_rulebooks_cache.store(character, orig, dest, branch, turn, tick, rulebook)
-        self.query.set_portal_rulebook(character, orig, dest, branch, turn, tick, rulebook)
-
     def _remember_avatarness(
             self, character, graph, node,
             is_avatar=True, branch=None, turn=None,
@@ -832,9 +828,32 @@ class Engine(AbstractEngine, gORM):
         )
 
     def _init_caches(self):
+        from .xcollections import (
+            StringStore,
+            FunctionStore,
+            CharacterMapping,
+            UniversalMapping
+        )
+        from .cache import (
+            Cache,
+            InitializedCache,
+            EntitylessCache,
+            InitializedEntitylessCache,
+            AvatarnessCache,
+            AvatarRulesHandledCache,
+            CharacterThingRulesHandledCache,
+            CharacterPlaceRulesHandledCache,
+            CharacterPortalRulesHandledCache,
+            NodeRulesHandledCache,
+            PortalRulesHandledCache,
+            CharacterRulesHandledCache,
+            ThingsCache
+        )
+        from .rule import AllRuleBooks, AllRules
+
         super()._init_caches()
-        self._portal_objs = {}
         self._things_cache = ThingsCache(self)
+        self._node_contents_cache = Cache(self)
         self.character = self.graph = CharacterMapping(self)
         self._universal_cache = EntitylessCache(self)
         self._rulebooks_cache = InitializedEntitylessCache(self)
@@ -859,6 +878,8 @@ class Engine(AbstractEngine, gORM):
         self._character_portal_rules_handled_cache \
             = CharacterPortalRulesHandledCache(self)
         self._avatarness_cache = AvatarnessCache(self)
+        self._turns_completed = defaultdict(lambda: max((0, self.turn - 1)))
+        """The last turn when the rules engine ran in each branch"""
         self.eternal = self.query.globl
         self.universal = UniversalMapping(self)
         if hasattr(self, '_action_file'):
@@ -882,7 +903,7 @@ class Engine(AbstractEngine, gORM):
 
     def _load_graphs(self):
         for charn in self.query.characters():
-            self._graph_objs[charn] = Character(self, charn, init_rulebooks=False)
+            self._graph_objs[charn] = self.char_cls(self, charn, init_rulebooks=False)
 
     def __init__(
             self,
@@ -899,34 +920,52 @@ class Engine(AbstractEngine, gORM):
             commit_modulus=None,
             random_seed=None,
             logfun=None,
-            validate=False
+            validate=False,
+            clear_code=False,
+            clear_world=False
     ):
         """Store the connections for the world database and the code database;
         set up listeners; and start a transaction
 
         """
+        import os
+        worlddbpath = worlddb.replace('sqlite:///', '')
+        if clear_world and os.path.exists(worlddbpath):
+            os.remove(worlddbpath)
         if isinstance(string, str):
             self._string_file = string
+            if clear_code and os.path.exists(string):
+                os.remove(string)
         else:
             self.string = string
         if isinstance(function, str):
             self._function_file = function
+            if clear_code and os.path.exists(function):
+                os.remove(function)
         else:
             self.function = function
         if isinstance(method, str):
             self._method_file = method
+            if clear_code and os.path.exists(method):
+                os.remove(method)
         else:
             self.method = method
         if isinstance(trigger, str):
             self._trigger_file = trigger
+            if clear_code and os.path.exists(trigger):
+                os.remove(trigger)
         else:
             self.trigger = trigger
         if isinstance(prereq, str):
             self._prereq_file = prereq
+            if clear_code and os.path.exists(prereq):
+                os.remove(prereq)
         else:
             self.prereq = prereq
         if isinstance(action, str):
             self._action_file = action
+            if clear_code and os.path.exists(action):
+                os.remove(action)
         else:
             self.action = action
         super().__init__(
@@ -947,22 +986,20 @@ class Engine(AbstractEngine, gORM):
         self.random_seed = random_seed
         self._rules_iter = self._follow_rules()
         # set up the randomizer
-        self.rando = Random()
+        from random import Random
+        self._rando = Random()
         if 'rando_state' in self.universal:
-            self.rando.setstate(self.universal['rando_state'])
+            self._rando.setstate(self.universal['rando_state'])
         else:
-            self.rando.seed(self.random_seed)
-            self.universal['rando_state'] = self.rando.getstate()
+            self._rando.seed(self.random_seed)
+            self.universal['rando_state'] = self._rando.getstate()
         if hasattr(self.method, 'init'):
             self.method.init(self)
 
     def _init_load(self, validate=False):
+        from .rule import Rule
         q = self.query
-        self._things_cache.load((
-            (character, thing, branch, turn, tick, (location, next_location))
-            for character, thing, branch, turn, tick, location, next_location
-            in q.things_dump()
-        ), validate)
+        self._things_cache.load(q.things_dump(), validate)
         super()._init_load(validate=validate)
         self._avatarness_cache.load(q.avatars_dump(), validate)
         self._universal_cache.load(q.universals_dump(), validate)
@@ -991,6 +1028,7 @@ class Engine(AbstractEngine, gORM):
             self._node_rules_handled_cache.store(*row, loading=True)
         for row in q.portal_rules_handled_dump():
             self._portal_rules_handled_cache.store(*row, loading=True)
+        self._turns_completed.update(q.turns_completed_dump())
         self._rules_cache = {name: Rule(self, name, create=False) for name in q.rules_dump()}
 
     @property
@@ -1146,6 +1184,7 @@ class Engine(AbstractEngine, gORM):
         )
 
     def _follow_rule(self, rule, handled_fun, branch, turn, *args):
+        self.debug("following rule: " + repr(rule))
         satisfied = True
         for prereq in rule.prereqs:
             res = prereq(*args)
@@ -1169,128 +1208,150 @@ class Engine(AbstractEngine, gORM):
         return actres
 
     def _follow_rules(self):
-        # TODO: rulebook priorities (not individual rule priorities, just follow the order of the rulebook)
-        # TODO: apply changes to a facade first, and commit it when you're done. Then report changes to the facade
+        # TODO: roll back changes done by rules that raise an exception
+        # TODO: if there's a paradox while following some rule, start a new branch, copying handled rules
+        from collections import defaultdict
         branch, turn, tick = self.btt()
         charmap = self.character
         rulemap = self.rule
+        todo = defaultdict(list)
 
-        # TODO: if there's a paradox while following some rule, start a new branch, copying handled rules
+        def do_rule(tup):
+            # Returns None if the entity following the rule no longer exists.
+            # Better way to handle this?
+            return {
+                'character': lambda charactername, rulebook, rulename: self._follow_rule(
+                    rulemap[rulename],
+                    partial(self._handled_char, charactername, rulebook, rulename, branch, turn, tick),
+                    branch, turn,
+                    charmap[charactername]
+                ) if charactername in charmap else None,
+                'avatar': lambda charn, rulebook, graphn, avn, rulen: self._follow_rule(
+                    rulemap[rulen],
+                    partial(self._handled_av, charn, graphn, avn, rulebook, rulen, branch, turn, tick),
+                    branch, turn,
+                    charmap[graphn].node[avn]
+                ) if self._node_exists(graphn, avn) else None,
+                'character_thing': lambda charn, rulebook, rulen, thingn: self._follow_rule(
+                    rulemap[rulen],
+                    partial(self._handled_char_thing, charn, thingn, rulebook, rulen, branch, turn, tick),
+                    branch, turn,
+                    charmap[charn].thing[thingn]
+                ) if charn in charmap and thingn in charmap[charn].thing else None,
+                'character_place': lambda charn, rulebook, rulen, placen: self._follow_rule(
+                    rulemap[rulen],
+                    partial(self._handled_char_place, charn, placen, rulebook, rulen, branch, turn, tick),
+                    branch, turn,
+                    charmap[charn].place[placen]
+                ) if charn in charmap and placen in charmap[charn].place else None,
+                'character_portal': lambda charn, rulebook, rulen, orign, destn: self._follow_rule(
+                    rulemap[rulen],
+                    partial(self._handled_char_port, charn, orign, destn, rulebook, rulen, branch, turn, tick),
+                    branch, turn,
+                    charmap[charn].portal[orign][destn]
+                ) if self._edge_exists(charn, orign, destn) else None,
+                'node': lambda charn, noden, rulebook, rulen: self._follow_rule(
+                    rulemap[rulen],
+                    partial(self._handled_node, charn, noden, rulebook, rulen, branch, turn, tick),
+                    branch, turn,
+                    charmap[charn].node[noden]
+                ) if self._node_exists(charn, noden) else None,
+                'portal': lambda charn, orign, destn, rulebook, rulen: self._follow_rule(
+                    rulemap[rulen],
+                    partial(self._handled_portal, charn, orign, destn, rulebook, rulen, branch, turn, tick),
+                    branch, turn,
+                    charmap[charn].portal[orign][destn]
+                ) if self._edge_exists(charn, orign, destn) else None
+            }[tup[0]](*tup[1:])
         for (
             charactername, rulebook, rulename
-        ) in list(
-            self._character_rules_handled_cache.iter_unhandled_rules(
+        ) in self._character_rules_handled_cache.iter_unhandled_rules(
                 branch, turn, tick
-            )
         ):
             if charactername not in charmap:
                 continue
-            yield self._follow_rule(
-                rulemap[rulename],
-                partial(self._handled_char, charactername, rulebook, rulename, branch, turn, tick),
-                branch, turn,
-                charmap[charactername]
-            )
+            todo[rulebook].append(('character', charactername, rulebook, rulename))
         for (
-            charn, rulebook, graphn, avn, rulen
-        ) in list(
-            self._avatar_rules_handled_cache.iter_unhandled_rules(
+            charn, graphn, avn, rulebook, rulen
+        ) in self._avatar_rules_handled_cache.iter_unhandled_rules(
                 branch, turn, tick
-            )
         ):
             if charn not in charmap:
                 continue
             char = charmap[charn]
             if graphn not in char.avatar or avn not in char.avatar[graphn]:
                 continue
-            yield self._follow_rule(
-                rulemap[rulen],
-                partial(self._handled_av, charn, graphn, avn, rulebook, rulen, branch, turn, tick),
-                branch, turn,
-                charmap[graphn].node[avn]
-            )
+            todo[rulebook].append(('avatar', charn, rulebook, graphn, avn, rulen))
         for (
-            charn, rulebook, rulen, thingn
-        ) in list(
-            self._character_thing_rules_handled_cache.iter_unhandled_rules(branch, turn, tick)
-        ):
+            charn, thingn, rulebook, rulen
+        ) in self._character_thing_rules_handled_cache.iter_unhandled_rules(branch, turn, tick):
             if charn not in charmap or thingn not in charmap[charn].thing:
                 continue
-            yield self._follow_rule(
-                rulemap[rulen],
-                partial(self._handled_char_thing, charn, thingn, rulebook, rulen, branch, turn, tick),
-                branch, turn,
-                charmap[charn].thing[thingn]
-            )
+            todo[rulebook].append(('character_thing', charn, rulebook, rulen, thingn))
         for (
-            charn, rulebook, rulen, placen
-        ) in list(
-            self._character_place_rules_handled_cache.iter_unhandled_rules(
-                branch, turn, tick
-            )
+            charn, placen, rulebook, rulen
+        ) in self._character_place_rules_handled_cache.iter_unhandled_rules(
+            branch, turn, tick
         ):
             if charn not in charmap or placen not in charmap[charn].place:
                 continue
-            yield self._follow_rule(
-                rulemap[rulen],
-                partial(self._handled_char_place, charn, placen, rulebook, rulen, branch, turn, tick),
-                branch, turn,
-                charmap[charn].place[placen]
-            )
+            todo[rulebook].append(('character_place', charn, rulebook, rulen, placen))
         for (
-            charn, rulebook, rulen, orign, destn
-        ) in list(
-            self._character_portal_rules_handled_cache.iter_unhandled_rules(
-                branch, turn, tick
-            )
-        ):
-            yield self._follow_rule(
-                rulemap[rulen],
-                partial(self._handled_char_port, charn, orign, destn, rulebook, rulen, branch, turn, tick),
-                branch, turn,
-                charmap[charn].portal[orign][destn]
-            )
-        for (
-                charn, noden, rulebook, rulen
-        ) in list(
-            self._node_rules_handled_cache.iter_unhandled_rules(
-                branch, turn, tick
-            )
-        ):
-            if charn not in charmap or noden not in charmap[charn]:
-                continue
-            yield self._follow_rule(
-                rulemap[rulen],
-                partial(self._handled_node, charn, noden, rulebook, rulen, branch, turn, tick),
-                branch, turn,
-                charmap[charn].node[noden]
-            )
-        for (
-                charn, orign, destn, rulebook, rulen
-        ) in list(
-            self._portal_rules_handled_cache.iter_unhandled_rules(
-                branch, turn, tick
-            )
+            charn, orign, destn, rulebook, rulen
+        ) in self._character_portal_rules_handled_cache.iter_unhandled_rules(
+            branch, turn, tick
         ):
             if charn not in charmap:
                 continue
             char = charmap[charn]
             if orign not in char.portal or destn not in char.portal[orign]:
                 continue
-            yield self._follow_rule(
-                rulemap[rulen],
-                partial(self._handled_port, charn, orign, destn, rulebook, rulen, branch, turn, tick),
-                branch, turn,
-                charmap[charn].portal[orign][destn]
-            )
+            todo[rulebook].append(('character_portal', charn, rulebook, rulen, orign, destn))
+        for (
+                charn, noden, rulebook, rulen
+        ) in self._node_rules_handled_cache.iter_unhandled_rules(
+            branch, turn, tick
+        ):
+            if charn not in charmap or noden not in charmap[charn]:
+                continue
+            todo[rulebook].append(('node', charn, noden, rulebook, rulen))
+        for (
+                charn, orign, destn, rulebook, rulen
+        ) in self._portal_rules_handled_cache.iter_unhandled_rules(
+                branch, turn, tick
+        ):
+            if charn not in charmap:
+                continue
+            char = charmap[charn]
+            if orign not in char.portal or destn not in char.portal[orign]:
+                continue
+            todo[rulebook].append(('portal', charn, orign, destn, rulebook, rulen))
+
+        # TODO: rulebook priorities (not individual rule priorities, just follow the order of the rulebook)
+        for rulebook in sort_set(todo.keys()):
+            for rule in todo[rulebook]:
+                try:
+                    yield do_rule(rule)
+                except StopIteration:
+                    raise InnerStopIteration
 
     def advance(self):
-        """Follow the next rule if available, or advance to the next turn."""
+        """Follow the next rule if available.
+
+        If we've run out of rules, reset the rules iterator.
+
+        """
         try:
             return next(self._rules_iter)
+        except InnerStopIteration:
+            self._rules_iter = self._follow_rules()
+            return StopIteration()
         except StopIteration:
             self._rules_iter = self._follow_rules()
             return final_rule
+        # except Exception as ex:
+        #     self._rules_iter = self._follow_rules()
+        #     return ex
 
     def new_character(self, name, data=None, **kwargs):
         """Create and return a new :class:`Character`."""
@@ -1310,7 +1371,7 @@ class Engine(AbstractEngine, gORM):
 
         """
         self._init_graph(name, 'DiGraph')
-        self._graph_objs[name] = Character(self, name, data, **kwargs)
+        self._graph_objs[name] = self.char_cls(self, name, data, **kwargs)
 
     def del_character(self, name):
         """Remove the Character from the database entirely.
@@ -1325,75 +1386,33 @@ class Engine(AbstractEngine, gORM):
     def _is_thing(self, character, node):
         return self._things_cache.contains_entity(character, node, *self.btt())
 
-    def _set_thing_loc_and_next(
-            self, character, node, loc, nextloc=None
+    def _set_thing_loc(
+            self, character, node, loc
     ):
         branch, turn, tick = self.nbtt()
-        self._things_cache.store(character, node, branch, turn, tick, (loc, nextloc))
-        self.query.thing_loc_and_next_set(
+        self._things_cache.store(character, node, branch, turn, tick, loc)
+        self.query.set_thing_loc(
             character,
             node,
             branch,
             turn,
             tick,
-            loc,
-            nextloc
+            loc
         )
-
-    def _node_exists(self, character, node):
-        return self._nodes_cache.contains_entity(character, node, *self.btt())
-
-    def _exist_node(self, character, node):
-        if self._node_exists(character, node):
-            return
-        branch, turn, tick = self.nbtt()
-        self.query.exist_node(
-            character,
-            node,
-            branch,
-            turn,
-            tick,
-            True
-        )
-        self._nodes_cache.store(character, node, branch, turn, tick, True)
-        self._nodes_rulebooks_cache.store(character, node, branch, turn, tick, (character, node))
-
-    def _edge_exists(self, character, orig, dest):
-        return self._edges_cache.contains_entity(
-            character, orig, dest, 0, *self.btt()
-        )
-
-    def _exist_edge(
-            self, character, orig, dest, exist=True
-    ):
-        if exist is self._edge_exists(character, orig, dest):
-            return
-        branch, turn, tick = self.nbtt()
-        self.query.exist_edge(
-            character,
-            orig,
-            dest,
-            0,
-            branch,
-            turn,
-            tick,
-            exist
-        )
-        self._edges_cache.store(
-            character, orig, dest, 0, branch, turn, tick, exist
-        )
-        self._portals_rulebooks_cache.store(character, orig, dest, branch, turn, tick, (character, orig, dest))
 
     def alias(self, v, stat='dummy'):
+        from .util import EntityStatAccessor
         r = DummyEntity(self)
         r[stat] = v
         return EntityStatAccessor(r, stat, engine=self)
 
     def entityfy(self, v, stat='dummy'):
+        from .query import Query
+        from .util import EntityStatAccessor
         if (
-                isinstance(v, Thing) or
-                isinstance(v, Place) or
-                isinstance(v, Portal) or
+                isinstance(v, self.thing_cls) or
+                isinstance(v, self.place_cls) or
+                isinstance(v, self.portal_cls) or
                 isinstance(v, Query) or
                 isinstance(v, EntityStatAccessor)
         ):

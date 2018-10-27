@@ -1,5 +1,27 @@
 # This file is part of allegedb, an object relational mapper for versioned graphs.
 # Copyright (C) Zachary Spector. public@zacharyspector.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+"""SQLAlchemy code to generate the SQL used by the allegedb ORM
+
+If SQLAlchemy is installed at runtime, this will use it to generate SQL on the fly;
+if it is not, allegedb can use a pregenerated file "sqlite.json" to store graphs in
+a SQLite database. Generate sqlite.json by running this on the command line:
+
+python3 alchemy.py >sqlite.json
+
+"""
 from functools import partial
 from sqlalchemy import (
     Table,
@@ -22,12 +44,8 @@ Column = partial(BaseColumn, nullable=False)
 
 
 from sqlalchemy.sql import bindparam, and_, or_
-from sqlalchemy.sql.ddl import CreateTable, CreateIndex
-from sqlalchemy import create_engine
 from json import dumps
 from functools import partial
-
-length = 50
 
 
 def tables_for_meta(meta):
@@ -276,6 +294,7 @@ def queries_for_table_dict(table):
 
 
 def compile_sql(dialect, meta):
+    from sqlalchemy.sql.ddl import CreateTable, CreateIndex
     r = {}
     table = tables_for_meta(meta)
     index = indices_for_table_dict(table)
@@ -319,10 +338,10 @@ class Alchemist(object):
 
 
 if __name__ == '__main__':
-    e = create_engine('sqlite:///:memory:')
+    from sqlalchemy.dialects.sqlite.pysqlite import SQLiteDialect_pysqlite
     out = dict(
         (k, str(v)) for (k, v) in
-        compile_sql(e.dialect, MetaData()).items()
+        compile_sql(SQLiteDialect_pysqlite(), MetaData()).items()
     )
 
     print(dumps(out, indent=4, sort_keys=True))

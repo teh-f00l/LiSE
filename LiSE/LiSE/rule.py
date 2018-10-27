@@ -1,5 +1,18 @@
 # This file is part of LiSE, a framework for life simulation games.
-# Copyright (c) Zachary Spector,  public@zacharyspector.com
+# Copyright (c) Zachary Spector, public@zacharyspector.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """ The fundamental unit of game logic, the Rule, and structures to
 store and organize them in.
 
@@ -17,19 +30,21 @@ need to change that.
 
 """
 from collections import (
-    Mapping,
     MutableMapping,
     MutableSequence,
     Hashable
 )
+from abc import ABC, abstractmethod
 from functools import partial
 from inspect import getsource
 from ast import parse
+
 from astunparse import unparse
 from blinker import Signal
 
 from .reify import reify
 from .util import dedent_source
+
 
 def roundtrip_dedent(source):
     """Reformat some lines of code into what unparse makes."""
@@ -83,32 +98,35 @@ class RuleFuncList(MutableSequence, Signal):
         return len(self._get())
 
     def __getitem__(self, i):
-        return self._get()[i]
+        return getattr(self._funcstore, self._get()[i])
 
     def __setitem__(self, i, v):
         v = self._nominate(v)
-        l = self._get()
+        l = list(self._get())
         l[i] = v
-        self._set(l)
+        self._set(tuple(l))
         self.send(self)
 
     def __delitem__(self, i):
-        l = self._get()
+        l = list(self._get())
         del l[i]
-        self._set(l)
+        self._set(tuple(l))
         self.send(self)
 
     def insert(self, i, v):
-        l = self._get()
+        l = list(self._get())
         l.insert(i, self._nominate(v))
-        self._set(l)
+        self._set(tuple(l))
         self.send(self)
 
     def append(self, v):
-        l = self._get()
-        l.append(self._nominate(v))
-        self._set(l)
+        self._set(self._get() + (self._nominate(v),))
         self.send(self)
+
+    def index(self, x, start=0, end=None):
+        if not callable(x):
+            x = getattr(self._funcstore, x)
+        return super().index(x, start, end)
 
 
 class TriggerList(RuleFuncList):
@@ -176,7 +194,7 @@ class RuleFuncListDescriptor(object):
         if not hasattr(obj, self.flid):
             setattr(obj, self.flid, self.cls(obj))
         flist = getattr(obj, self.flid)
-        namey_value = [flist._nominate(v) for v in value]
+        namey_value = tuple(flist._nominate(v) for v in value)
         flist._set(namey_value)
         branch, turn, tick = obj.engine.nbtt()
         flist._cache.store(obj.name, branch, turn, tick, namey_value)
@@ -218,9 +236,9 @@ class Rule(object):
         if create and not self.engine._triggers_cache.contains_key(name, branch, turn, tick):
             tick += 1
             self.engine.tick = tick
-            triggers = list(self._fun_names_iter('trigger', triggers or []))
-            prereqs = list(self._fun_names_iter('prereq', prereqs or []))
-            actions = list(self._fun_names_iter('action', actions or []))
+            triggers = tuple(self._fun_names_iter('trigger', triggers or []))
+            prereqs = tuple(self._fun_names_iter('prereq', prereqs or []))
+            actions = tuple(self._fun_names_iter('action', actions or []))
             self.engine.query.set_rule(
                 name, branch, turn, tick, triggers, prereqs, actions
             )
@@ -303,9 +321,12 @@ class RuleBook(MutableSequence, Signal):
 
     """
     def _get_cache(self, branch, turn, tick):
-        return self.engine._rulebooks_cache.retrieve(
-            self.name, branch, turn, tick
-        )
+        try:
+            return self.engine._rulebooks_cache.retrieve(
+                self.name, branch, turn, tick
+            )
+        except KeyError:
+            return []
 
     def _set_cache(self, branch, turn, tick, v):
         self.engine._rulebooks_cache.store(self.name, branch, turn, tick, v)
@@ -328,7 +349,7 @@ class RuleBook(MutableSequence, Signal):
             return 0
 
     def __getitem__(self, i):
-        return self.engine.rule[self._cache[i]]
+        return self.engine.rule[self._get_cache(*self.engine.btt())[i]]
 
     def _coerce_rule(self, v):
         if isinstance(v, Rule):
@@ -384,8 +405,8 @@ class RuleBook(MutableSequence, Signal):
         except KeyError:
             raise IndexError
         del cache[i]
-        self.engine.query.set_rulebook(self.name, branch, tick, cache)
-        self.engine._rulebooks_cache.store(self.name, branch, tick, cache)
+        self.engine.query.set_rulebook(self.name, branch, turn, tick, cache)
+        self.engine._rulebooks_cache.store(self.name, branch, turn, tick, cache)
         self.engine.rulebook.send(self, i=i, v=None)
         self.send(self, i=i, v=None)
 
@@ -484,11 +505,13 @@ rule_mappings = {}
 rulebooks = {}
 
 
-class RuleFollower(object):
+class RuleFollower(ABC):
     """Interface for that which has a rulebook associated, which you can
     get a :class:`RuleMapping` into
 
     """
+    __slots__ = ()
+
     @property
     def _rule_mapping(self):
         if id(self) not in rule_mappings:
@@ -539,14 +562,17 @@ class RuleFollower(object):
             raise AttributeError("Need an engine before I can get rules")
         return self._rule_mapping.values()
 
+    @abstractmethod
     def _get_rule_mapping(self):
         """Get the :class:`RuleMapping` for my rulebook."""
         raise NotImplementedError
 
+    @abstractmethod
     def _get_rulebook_name(self):
         """Get the name of my rulebook."""
         raise NotImplementedError
 
+    @abstractmethod
     def _set_rulebook_name(self, n):
         """Tell the database that this is the name of the rulebook to use for
         me.
@@ -555,7 +581,7 @@ class RuleFollower(object):
         raise NotImplementedError
 
 
-class AllRuleBooks(Mapping, Signal):
+class AllRuleBooks(MutableMapping, Signal):
     __slots__ = ['engine', '_cache']
 
     def __init__(self, engine):
@@ -576,6 +602,17 @@ class AllRuleBooks(Mapping, Signal):
         if k not in self._cache:
             self._cache[k] = RuleBook(self.engine, k)
         return self._cache[k]
+
+    def __setitem__(self, key, value):
+        if key not in self._cache:
+            self._cache[key] = RuleBook(self.engine, key)
+        rb = self._cache[key]
+        while len(rb) > 0:
+            del rb[0]
+        rb.extend(value)
+
+    def __delitem__(self, key):
+        self.engine._del_rulebook(key)
 
 
 class AllRules(MutableMapping, Signal):

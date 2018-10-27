@@ -1,5 +1,18 @@
 # This file is part of ELiDE, frontend to LiSE, a framework for life simulation games.
-# Copyright (c) Zachary Spector,  public@zacharyspector.com
+# Copyright (c) Zachary Spector, public@zacharyspector.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 from functools import partial
 
 from kivy.clock import Clock
@@ -19,7 +32,8 @@ class CharactersRecycleBoxLayout(SelectableRecycleBoxLayout):
 
     def apply_selection(self, index, view, is_selected):
         super().apply_selection(index, view, is_selected)
-        self.character_name = view.text
+        if is_selected:
+            self.character_name = view.text
 
 
 class CharactersView(RecycleView):
@@ -108,10 +122,10 @@ Builder.load_string("""
             multiline: False
         Button:
             text: '+'
-            on_press: root._trigger_new_character(newname.text)
+            on_release: root._trigger_new_character(newname.text)
             size_hint_y: 0.05
         Button:
             text: 'Close'
-            on_press: root.toggle()
+            on_release: root.toggle()
             size_hint_y: 0.05
 """)

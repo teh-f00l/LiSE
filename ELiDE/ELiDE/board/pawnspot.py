@@ -1,18 +1,36 @@
-# This file is part of LiSE, a framework for life simulation games.
-# Copyright (c) Zachary Spector,  zacharyspector@gmail.com
+# This file is part of ELiDE, frontend to LiSE, a framework for life simulation games.
+# Copyright (c) Zachary Spector, public@zacharyspector.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """Code that draws the box around a Pawn or Spot when it's selected"""
-from functools import partial
+from collections import defaultdict
 
 from kivy.properties import (
     ObjectProperty,
     BooleanProperty,
     ListProperty,
+    DictProperty
 )
 from kivy.graphics import (
     InstructionGroup,
+    Translate,
+    PopMatrix,
+    PushMatrix,
     Color,
     Line
 )
+from kivy.uix.layout import Layout
 from kivy.clock import Clock
 from kivy.logger import Logger
 from kivy.lang import Builder
@@ -20,7 +38,7 @@ from ELiDE.kivygarden.texturestack import ImageStack
 from ..util import trigger
 
 
-class PawnSpot(ImageStack):
+class PawnSpot(ImageStack, Layout):
     """The kind of ImageStack that represents a :class:`Thing` or
     :class:`Place`.
 
@@ -29,10 +47,46 @@ class PawnSpot(ImageStack):
     proxy = ObjectProperty()
     engine = ObjectProperty()
     selected = BooleanProperty(False)
-    hit = BooleanProperty(False)
     linecolor = ListProperty()
     name = ObjectProperty()
     use_boardspace = True
+    positions = DictProperty()
+    _childs = DictProperty()
+
+    def __init__(self, **kwargs):
+        if 'proxy' in kwargs:
+            kwargs['name'] = kwargs['proxy'].name
+        super().__init__(**kwargs)
+        self.bind(pos=self._position, positions=self._position, children=self._trigger_finalize_all)
+
+    def collide_point(self, x, y):
+        if not super().collide_point(x, y):
+            return False
+        x, y = self.to_local(x, y, relative=True)
+        for path in reversed(self.paths):
+            img = self.pathimgs[path]
+            if not img._image:
+                from kivy.core.image import Image, ImageData
+                img._image = _image = Image(img._texture)
+                _image._data = [ImageData(img.texture.width, img.texture.height, 'rgba', img.texture.pixels)]
+            if not hasattr(img._image, '_data') or not img._image._data:
+                # it's in an atlas
+                from kivy.core.image import ImageData
+                img._image._data = [ImageData(img.texture.width, img.texture.height, 'rgba', img.texture.pixels)]
+            try:
+                r, g, b, a = img.read_pixel(x, y)
+            except IndexError:
+                return False
+            if a:
+                return True
+        return False
+
+    def on_touch_move(self, touch):
+        """If I'm being dragged, move to follow the touch."""
+        if touch.grab_current is not self:
+            return False
+        self.center = touch.pos
+        return True
 
     def finalize(self, initial=True):
         """Call this after you've created all the PawnSpot you need and are ready to add them to the board."""
@@ -110,27 +164,34 @@ class PawnSpot(ImageStack):
             self.color.rgba = self.linecolor
             return
 
-        def upd_box_points(*args):
-            self.box.points = [
-                self.x, self.y,
-                self.right, self.y,
-                self.right, self.top,
-                self.x, self.top,
-                self.x, self.y
-            ]
-        boxgrp = InstructionGroup()
-        self.color = Color(*self.linecolor)
+        def upd_box_translate(*args):
+            self.box_translate.xy = self.pos
 
+        def upd_box_points(*args):
+            self.box.points = [0, 0, self.width, 0, self.width, self.height, 0, self.height, 0, 0]
+
+        self.boxgrp = boxgrp = InstructionGroup()
+        self.color = Color(*self.linecolor)
+        self.box_translate = Translate(*self.pos)
+        boxgrp.add(PushMatrix())
+        boxgrp.add(self.box_translate)
         boxgrp.add(self.color)
         self.box = Line()
         upd_box_points()
         self.bind(
-            pos=upd_box_points,
-            size=upd_box_points
+            size=upd_box_points,
+            pos=upd_box_translate
         )
         boxgrp.add(self.box)
         boxgrp.add(Color(1., 1., 1.))
-        self.group.add(boxgrp)
+        boxgrp.add(PopMatrix())
+
+    def on_board(self, *args):
+        if not (hasattr(self, 'group') and hasattr(self, 'boxgrp')):
+            Clock.schedule_once(self.on_board, 0)
+            return
+        self.canvas.add(self.group)
+        self.canvas.add(self.boxgrp)
 
     @trigger
     def restack(self, *args):
@@ -138,113 +199,98 @@ class PawnSpot(ImageStack):
         self.clear_widgets()
         for child in childs:
             self.add_widget(child)
+        self.do_layout()
 
-    def add_widget(self, wid, i=None, canvas=None):
-        """Put the widget's canvas in my ``board``'s ``pawnlayout`` rather
-        than my own canvas.
+    def finalize_all(self, *args):
+        for child in self.children:
+            child.finalize()
 
-        The idea is that all my child widgets are to be instances of
-        :class:`Pawn`, and should therefore be drawn after every
-        non-:class:`Pawn` widget, so that pawns are on top of spots
-        and arrows.
+    def _trigger_finalize_all(self, *args):
+        Clock.unschedule(self.finalize_all)
+        Clock.schedule_once(self.finalize_all, -1)
 
-        """
-        if i is None:
-            for i, child in enumerate(self.children, start=1):
+    def add_widget(self, wid, index=None, canvas=None):
+        if index is None:
+            for index, child in enumerate(self.children, start=1):
                 if wid.priority < child.priority:
-                    i = len(self.children) - i
+                    index = len(self.children) - index
                     break
-        super().add_widget(wid, i, canvas)
-        self.bind_trigger_pospawn(wid)
-        if not hasattr(wid, 'group'):
-            return
-        wid._no_use_canvas = True
-        mycanvas = (
-            self.canvas.after if canvas == 'after' else
-            self.canvas.before if canvas == 'before' else
-            self.canvas
-        )
-        pawncanvas = (
-            self.board.pawnlayout.canvas.after if canvas == 'after' else
-            self.board.pawnlayout.canvas.before if canvas == 'before' else
-            self.board.pawnlayout.canvas
-        )
-        mycanvas.remove(wid.canvas)
+        super().add_widget(wid, index=index, canvas=canvas)
+        self._childs[wid.uid] = wid
+        self._trigger_layout()
+
+    def remove_widget(self, widget):
+        del self._childs[widget.uid]
+        del self.positions[widget.uid]
+        super().remove_widget(widget)
+        self._trigger_layout()
+
+    def do_layout(self, *args):
+        # First try to lay out my children inside of me,
+        # leaving at least this much space on the sides
+        xpad = self.proxy.get('_xpad', self.width / 4)
+        ypad = self.proxy.get('_ypad', self.height / 4)
+        self.gutter = gutter = self.proxy.get('_gutter', xpad/2)
+        height = self.height - ypad
+        content_height = 0
+        too_tall = False
+        width = self.width - xpad
+        content_width = 0
+        groups = defaultdict(list)
         for child in self.children:
-            if hasattr(child, 'group'):
-                if child.group in pawncanvas.children:
-                    pawncanvas.remove(child.group)
-                pawncanvas.add(child.group)
-            else:
-                pawncanvas.add(child.canvas)
-        self.pospawn(wid)
+            group = child.proxy.get('_group', '')
+            groups[group].append(child)
+            if child.height > height:
+                height = child.height
+                too_tall = True
+        piles = {}
+        # Arrange the groups into piles that will fit in me vertically
+        for group, members in groups.items():
+            members.sort(key=lambda x: x.width * x.height, reverse=True)
+            high = 0
+            subgroups = []
+            subgroup = []
+            for member in members:
+                high += member.height
+                if high > height:
+                    subgroups.append(subgroup)
+                    subgroup = [member]
+                    high = member.height
+                else:
+                    subgroup.append(member)
+            subgroups.append(subgroup)
+            content_height = max((content_height, sum(wid.height for wid in subgroups[0])))
+            content_width += sum(max(wid.width for wid in subgrp) for subgrp in subgroups)
+            piles[group] = subgroups
+        self.content_width = content_width + gutter * (len(piles) - 1)
+        too_wide = content_width > width
+        # If I'm big enough to fit all this stuff, calculate an offset that will ensure
+        # it's all centered. Otherwise just offset to my top-right so the user can still
+        # reach me underneath all the pawns.
+        if too_wide:
+            offx = self.width
+        else:
+            offx = self.width / 2 - content_width / 2
+        if too_tall:
+            offy = self.height
+        else:
+            offy = self.height / 2 - content_height / 2
+        positions = {}
+        for pile, subgroups in sorted(piles.items()):
+            for subgroup in subgroups:
+                subw = subh = 0
+                for member in subgroup:
+                    positions[member.uid] = (offx, offy + subh)
+                    subw = max((subw, member.width))
+                    subh += member.height
+                offx += subw
+            offx += gutter
+        self.positions = positions
 
-    def remove_widget(self, wid):
-        try:
-            self.unbind_trigger_pospawn(wid)
-        except KeyError:
-            pass
-        return super().remove_widget(wid)
-
-    def pospawn(self, pawn, *args):
-        """Given some :class:`Pawn` instance that's to be on top of me, set
-        its ``pos`` so that it looks like it's on top of me but
-        doesn't cover me so much that you can't select me.
-
-        """
-        i = 0
-        for child in self.children:
-            if child is pawn:
-                break
-            i += 1
-        off = i * self.offset
-        (x, y) = self.center
-        pawn.pos = (x+off, y+off)
-
-    def _upd_pawns_here(self, *args):
-        """Move any :class:`Pawn` atop me so it still *is* on top of me,
-        presumably after I've moved.
-
-        """
-        for pawn in self.children:
-            self.pospawn(pawn)
-    _trigger_upd_pawns_here = trigger(_upd_pawns_here)
-
-    def _get_pospawn_partial(self, pawn):
-        if pawn not in self._pospawn_partials:
-            self._pospawn_partials[pawn] = partial(
-                self.pospawn, pawn
-            )
-        return self._pospawn_partials[pawn]
-
-    def _get_pospawn_trigger(self, pawn, *args):
-        if pawn not in self._pospawn_triggers:
-            self._pospawn_triggers[pawn] = Clock.create_trigger(
-                self._get_pospawn_partial(pawn)
-            )
-        return self._pospawn_triggers[pawn]
-
-    def bind_trigger_pospawn(self, pawn):
-        trigger = self._get_pospawn_trigger(pawn)
-        pawn.bind(
-            pos=trigger,
-            size=trigger
-        )
-        self.bind(
-            pos=trigger,
-            size=trigger
-        )
-
-    def unbind_trigger_pospawn(self, pawn):
-        trigger = self._get_pospawn_trigger(pawn)
-        pawn.unbind(
-            pos=trigger,
-            size=trigger
-        )
-        self.unbind(
-            pos=trigger,
-            size=trigger
-        )
+    def _position(self, *args):
+        x, y = self.pos
+        for member_id, (offx, offy) in self.positions.items():
+            self._childs[member_id].pos = x + offx, y + offy
 
 
 kv = """

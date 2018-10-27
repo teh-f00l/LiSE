@@ -1,5 +1,18 @@
 # This file is part of LiSE, a framework for life simulation games.
-# Copyright (c) Zachary Spector,  zacharyspector@gmail.com
+# Copyright (c) Zachary Spector, public@zacharyspector.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """A simulation of students and teachers, both living on campus,
 attending classes and teaching or learning, as appropriate.
 
@@ -134,7 +147,11 @@ def install(eng):
     @learn.trigger
     def in_class(node):
         classroom = node.engine.character['physical'].place['classroom']
-        return node.location == classroom
+        if hasattr(node, 'location'):
+            assert node == node.character.avatar['physical'].only
+            return node.location == classroom
+        else:
+            return node.character.avatar['physical'].only.location == classroom
 
     learn.prereq(class_in_session)
 
@@ -192,6 +209,7 @@ def install(eng):
             student1.add_avatar(body1)
             student_body.add_avatar(body1)
             student0.stat['room'] = student1.stat['room'] = room
+            assert student0.stat['room'] == student1.stat['room'] == room
             student0.stat['roommate'] = student1
             student1.stat['roommate'] = student0
             for student in (student0, student1):
@@ -212,7 +230,7 @@ def install(eng):
                     student.rule(rule)
                 # Apply these previously written rules to each brain cell
                 for rule in (learn, sober_up, catch_up):
-                    student.node.rule(rule)
+                    student.place.rule(rule)
 
 
 if __name__ == "__main__":
